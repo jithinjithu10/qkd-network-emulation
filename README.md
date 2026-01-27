@@ -1,12 +1,34 @@
-# QKD Network Emulation
+# QKD Network Emulation — Week 3  
+## Post-Processing Layer Implementation
 
-This repository contains a software-based emulation of a Quantum Key Distribution (QKD) network, developed to validate control-plane behavior, key lifecycle management, and ETSI QKD-014 style interfaces.
+This branch extends the Week-2 QKD network emulation by introducing a post-processing layer, completing the logical QKD key pipeline before storage.
 
-## Implemented Features (Week 1 & Week 2)
+---
 
-- Two-node QKD network architecture (IITR ↔ IITJ)
-- Central Controller for control-plane routing
-- Local and Remote Key Management Systems (KMS)
-- Software-based quantum key emulation layer
-- REST APIs inspired by ETSI GS QKD-014
-- TTL-based key lifecycle and expiry enforcement
+## Week-3 Objective
+
+The objective of Week-3 is to simulate the QKD post-processing stage in a system-level manner, focusing on architecture, correctness, and key lifecycle management, rather than physical quantum simulation.
+
+The following abstractions are implemented:
+
+- Key sifting  
+- Error filtering  
+- Privacy amplification  
+- Export of verified keys to the Remote KMS  
+
+---
+
+## System Overview
+
+The system consists of three independent services:
+
+| Component | Role | Port |
+|---------|------|------|
+| Central Controller | Control-plane routing abstraction | 8000 |
+| Local KMS (IIT Roorkee) | Raw key generation and post-processing | 8001 |
+| Remote KMS (IIT Jammu) | Independent validation and storage | 8002 |
+
+---
+
+## Key Lifecycle (Week-3)
+
