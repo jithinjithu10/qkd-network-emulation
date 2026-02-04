@@ -1,3 +1,10 @@
+# =====================================================
+# QKD Post-Processing Layer (Week 3)
+# Includes: key sifting, error filtering, privacy amplification
+# Not used in Week 4 (Key Management System phase)
+# =====================================================
+
+
 import random
 import hashlib
 

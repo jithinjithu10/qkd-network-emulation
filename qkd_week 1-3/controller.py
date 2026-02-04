@@ -1,3 +1,10 @@
+# =====================================================
+# Central Controller (Week 1–2)
+# Provides control-plane routing between KMS nodes
+# Not used in Week 4 (Single Central KMS architecture)
+# =====================================================
+
+
 # Import FastAPI framework to create REST-based control APIs
 from fastapi import FastAPI
 

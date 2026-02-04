@@ -1,3 +1,7 @@
+# Legacy Remote KMS (Week 2–3)
+# Not used in Week 4 – Single Central KMS model
+
+
 # Import FastAPI framework to create REST APIs
 from fastapi import FastAPI
 

@@ -1,3 +1,9 @@
+# =====================================================
+# Legacy QKD Emulation Layer (Week 2–3)
+# Not used in Week 4 (Central KMS lifecycle management)
+# =====================================================
+
+
 # secrets module provides cryptographically secure random numbers
 # This is used to generate strong random key material
 import secrets
