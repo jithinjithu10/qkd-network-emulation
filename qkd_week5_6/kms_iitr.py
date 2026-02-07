@@ -41,9 +41,7 @@ async def lifespan(app: FastAPI):
     """
     init_db()
     log_event("IITR-KMS started")
-
     yield
-
     log_event("IITR-KMS stopped")
 
 
@@ -78,7 +76,7 @@ def generate_keys(request: dict):
     """
     number_of_keys = request["number_of_keys"]
     key_size = request["key_size"]
-    role = request.get("role", "ENC")  # Default to ENC pool
+    role = request.get("role", "ENC")  # Default ENC
 
     keys = []
 
@@ -87,19 +85,19 @@ def generate_keys(request: dict):
         key_bytes = key_size // 8
         key_value = secrets.token_bytes(key_bytes).hex()
 
-        # Create Key object
+        # Create Key object (Q Buffer entry)
         key = Key(
             key_id=str(uuid.uuid4()),
             key_value=key_value,
             key_size=key_size,
             created_at=datetime.now(timezone.utc).isoformat(),
-            ttl_seconds=300
+            ttl_seconds=300,
+            role=KeyRole(role)
         )
 
         key.state = KeyState.READY
-        key.role = KeyRole(role)
 
-        # Store key in persistent storage (Q Buffer)
+        # Store key in persistent storage
         store_key(key)
         log_event(f"Key generated and stored: {key.key_id} ({role})")
 
@@ -115,27 +113,21 @@ def generate_keys(request: dict):
 
 
 # -------------------------------------------------
-# Key Allocation Endpoint (Policy Driven)
+# Key Allocation Endpoint (Q → S Buffer)
 # -------------------------------------------------
 @app.post("/api/v1/keys/allocate")
 def allocate_key(request: dict):
     """
-    Allocate a key for a specific session/application.
-    Implements:
-    - Policy-driven selection
-    - Freshness-aware allocation
-    - Q Buffer → S Buffer transition
+    Allocate a key for a session/application.
     """
     session_id = request["session_id"]
     role = KeyRole(request.get("role", "ENC"))
 
-    # Fetch freshest READY key for role
     key_id = fetch_ready_key(role)
 
     if not key_id:
         return {"status": "NO_KEYS_AVAILABLE"}
 
-    # Reserve key for the session (S Buffer)
     reserve_key(key_id, session_id)
     log_event(f"Key reserved: {key_id} for session {session_id}")
 
@@ -153,7 +145,6 @@ def allocate_key(request: dict):
 def consume_reserved_key(request: dict):
     """
     Consume a previously reserved key.
-    Implements final lifecycle transition.
     """
     key_id = request["key_id"]
 
