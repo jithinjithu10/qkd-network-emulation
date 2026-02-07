@@ -10,7 +10,7 @@ import requests
 app = FastAPI()
 
 # Replace with actual server IP
-CENTRAL_KMS_URL = "http://10.13.1.120:8001"
+CENTRAL_KMS_URL = "http://10.13.1.220:8001"
 
 
 @app.post("/api/v1/request-key")
