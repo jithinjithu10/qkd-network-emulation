@@ -92,7 +92,7 @@ def generate_keys(request: dict):
             key_size=key_size,
             created_at=datetime.now(timezone.utc).isoformat(),
             ttl_seconds=300,
-            role=KeyRole(role)
+            role=role   # store plain string: "ENC" or "DEC"
         )
 
         key.state = KeyState.READY
