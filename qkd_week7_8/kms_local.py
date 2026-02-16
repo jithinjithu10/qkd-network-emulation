@@ -19,8 +19,9 @@ controller.update_link(
     CENTRAL_NODE_ID,
     CENTRAL_NODE_ID,
     rate=1000,
-    status=LinkStatus.AVAILABLE.value
+    availability=LinkStatus.AVAILABLE.value
 )
+
 
 
 @app.get("/api/v1/status")
