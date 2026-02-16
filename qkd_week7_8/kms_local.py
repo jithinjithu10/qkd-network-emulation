@@ -84,3 +84,6 @@ def buffer_status():
         auth_token,
         "/api/v1/buffer/status"
     )
+
+from controller_api import router as controller_router
+app.include_router(controller_router)
