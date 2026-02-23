@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+requests
+streamlit
+pandas
+matplotlib
+scipy
+cryptography
