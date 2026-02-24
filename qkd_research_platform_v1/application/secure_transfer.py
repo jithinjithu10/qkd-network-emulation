@@ -1,30 +1,41 @@
 # secure_transfer.py
 """
 Research-Grade Secure Transfer Layer
-Week 9–10 Advanced Implementation
-AES-GCM | OTP | Dynamic Re-keying | Metrics | Attack Simulation
+Debug Instrumented Version
 """
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
 import time
 import random
+import hashlib
 
 
 class SecureTransfer:
 
     def __init__(self, key_hex, rekey_threshold=100_000):
 
-        self.master_key = bytes.fromhex(key_hex)[:32]  # AES-256
+        print("\n=== SecureTransfer Initialization ===")
+        print("Input key_hex:", key_hex)
+
+        # --------------------------------------------------
+        # SAFETY FIX:
+        # UUID is not valid hex key → hash it to 32 bytes
+        # --------------------------------------------------
+        if "-" in key_hex:
+            print("Key appears to be UUID. Hashing to derive AES key.")
+            derived = hashlib.sha256(key_hex.encode()).digest()
+            self.master_key = derived
+        else:
+            self.master_key = bytes.fromhex(key_hex)[:32]
+
+        print("Derived key length:", len(self.master_key))
+
         self.current_key = self.master_key
 
         self.rekey_threshold = rekey_threshold
         self.bytes_transferred = 0
         self.rekey_count = 0
-
-        self.backend = default_backend()
 
         # Metrics
         self.metrics = {
@@ -35,10 +46,15 @@ class SecureTransfer:
             "throughput_mbps": 0
         }
 
+        print("SecureTransfer initialized successfully")
+
+
     # =================================================
-    # AES-GCM ENCRYPTION (Authenticated)
+    # AES-GCM ENCRYPTION
     # =================================================
-    def encrypt_aes(self, plaintext: bytes):
+    def encrypt(self, plaintext: bytes):
+
+        print("\nEncrypting message of size:", len(plaintext))
 
         start = time.time()
 
@@ -49,16 +65,20 @@ class SecureTransfer:
 
         elapsed = time.time() - start
 
-        self._update_metrics(len(plaintext), elapsed)
+        print("Encryption time:", elapsed)
 
+        self._update_metrics(len(plaintext), elapsed)
         self._check_rekey()
 
         return nonce + ciphertext
 
+
     # =================================================
     # AES-GCM DECRYPTION
     # =================================================
-    def decrypt_aes(self, data: bytes):
+    def decrypt(self, data: bytes):
+
+        print("Decrypting message")
 
         start = time.time()
 
@@ -70,38 +90,20 @@ class SecureTransfer:
         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
 
         elapsed = time.time() - start
+
+        print("Decryption time:", elapsed)
+
         self.metrics["decryption_time"] += elapsed
 
         return plaintext
 
-    # =================================================
-    # OTP MODE (True One-Time Pad Simulation)
-    # =================================================
-    def encrypt_otp(self, plaintext: bytes):
-
-        if len(self.current_key) < len(plaintext):
-            raise ValueError("Key too short for OTP")
-
-        start = time.time()
-
-        ciphertext = bytes(
-            [plaintext[i] ^ self.current_key[i] for i in range(len(plaintext))]
-        )
-
-        elapsed = time.time() - start
-
-        self._update_metrics(len(plaintext), elapsed)
-
-        return ciphertext
-
-    def decrypt_otp(self, ciphertext: bytes):
-
-        return self.encrypt_otp(ciphertext)  # XOR reversible
 
     # =================================================
-    # ATTACK SIMULATION (Bit Flip)
+    # ATTACK SIMULATION
     # =================================================
     def inject_bit_flip(self, ciphertext: bytes, probability=0.01):
+
+        print("Injecting bit flips with probability:", probability)
 
         corrupted = bytearray(ciphertext)
 
@@ -110,6 +112,7 @@ class SecureTransfer:
                 corrupted[i] ^= 0x01
 
         return bytes(corrupted)
+
 
     # =================================================
     # METRICS UPDATE
@@ -125,6 +128,7 @@ class SecureTransfer:
             mbps = (byte_count * 8) / (elapsed_time * 1_000_000)
             self.metrics["throughput_mbps"] = mbps
 
+
     # =================================================
     # DYNAMIC REKEYING
     # =================================================
@@ -132,11 +136,14 @@ class SecureTransfer:
 
         if self.bytes_transferred >= self.rekey_threshold:
 
+            print("Rekey threshold reached. Generating new key.")
+
             self.current_key = os.urandom(32)
             self.bytes_transferred = 0
             self.rekey_count += 1
 
             self.metrics["rekey_count"] += 1
+
 
     # =================================================
     # METRICS EXPORT

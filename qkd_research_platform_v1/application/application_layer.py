@@ -2,8 +2,10 @@
 
 import requests
 import uuid
+import time
 from datetime import datetime
-from config import CENTRAL_KMS_URL
+
+from qkd_research_platform_v1.config import CENTRAL_KMS_URL
 
 
 class QKDApplicationClient:
@@ -19,6 +21,9 @@ class QKDApplicationClient:
         self.failed_requests = 0
         self.latencies = []
 
+        print("QKDApplicationClient initialized")
+        print("KMS URL:", CENTRAL_KMS_URL)
+
 
     # =============================================
     # Create Session
@@ -26,6 +31,10 @@ class QKDApplicationClient:
     def create_session(self):
 
         self.session_id = str(uuid.uuid4())
+
+        print("\n=== SESSION CREATED ===")
+        print("Session ID:", self.session_id)
+
         return self.session_id
 
 
@@ -37,17 +46,38 @@ class QKDApplicationClient:
         if not self.session_id:
             raise Exception("Session not created")
 
+        print("\n=== REQUESTING KEY ===")
+        print("Session:", self.session_id)
+        print("Role:", role)
+
         self.total_requests += 1
 
-        response = requests.post(
-            f"{CENTRAL_KMS_URL}/api/v1/keys/allocate",
-            json={
-                "session_id": self.session_id,
-                "role": role
-            }
-        )
+        try:
+            start_time = time.time()
+
+            response = requests.post(
+                f"{CENTRAL_KMS_URL}/api/v1/keys/allocate",
+                json={
+                    "session_id": self.session_id,
+                    "role": role
+                },
+                timeout=10
+            )
+
+            end_time = time.time()
+            round_trip = end_time - start_time
+
+            print("HTTP Status Code:", response.status_code)
+            print("Round-trip time:", round_trip)
+
+        except Exception as e:
+            print("ERROR contacting KMS:", e)
+            self.failed_requests += 1
+            return None
 
         data = response.json()
+
+        print("Response Data:", data)
 
         if data.get("status") != "RESERVED":
 
@@ -65,6 +95,11 @@ class QKDApplicationClient:
 
         if latency:
             self.latencies.append(latency)
+
+        print("Key Reserved:", key_id)
+        print("Allocation Latency:", latency)
+        print("Buffer Pressure:", pressure)
+        print("Policy Mode:", policy_mode)
 
         self.local_key_store[key_id] = {
             "received_at": datetime.utcnow(),
@@ -85,14 +120,26 @@ class QKDApplicationClient:
     def consume_key(self):
 
         if not self.session_id:
+            print("No active session")
             return
 
-        response = requests.post(
-            f"{CENTRAL_KMS_URL}/api/v1/keys/consume",
-            json={"session_id": self.session_id}
-        )
+        print("\n=== CONSUMING KEY ===")
+        print("Session:", self.session_id)
+
+        try:
+            response = requests.post(
+                f"{CENTRAL_KMS_URL}/api/v1/keys/consume",
+                json={"session_id": self.session_id},
+                timeout=10
+            )
+
+        except Exception as e:
+            print("ERROR consuming key:", e)
+            return None
 
         data = response.json()
+
+        print("Consume Response:", data)
 
         if data.get("status") == "CONSUMED":
 
@@ -116,7 +163,7 @@ class QKDApplicationClient:
             if self.latencies else 0
         )
 
-        return {
+        metrics = {
             "total_requests": self.total_requests,
             "failed_requests": self.failed_requests,
             "success_rate":
@@ -125,3 +172,8 @@ class QKDApplicationClient:
                 if self.total_requests else 0,
             "average_latency": avg_latency
         }
+
+        print("\n=== APPLICATION METRICS ===")
+        print(metrics)
+
+        return metrics

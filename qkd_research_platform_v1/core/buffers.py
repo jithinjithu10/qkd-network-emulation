@@ -1,26 +1,14 @@
 """
-buffers.py
------------
-
-Research-Grade In-Memory Buffer Layer
-Primary Data Plane for QKD KMS
-
-Implements:
-- QBuffer (READY keys)
-- SBuffer (RESERVED keys per session)
-- Capacity limits
-- Buffer pressure tracking
-- Freshness decay
-- TTL cleanup
-- Physics-aware filtering
-- Stress metrics
+Optimized In-Memory Buffer Layer
+Performance + Debug Version
 """
 
 from collections import deque, defaultdict
 import threading
 from datetime import datetime, timezone
-from models import KeyState, KeyRole
-from config import (
+
+from qkd_research_platform_v1.core.models import KeyState, KeyRole
+from qkd_research_platform_v1.config import (
     DEFAULT_TTL,
     MIN_FRESHNESS_SCORE,
     QBER_THRESHOLD
@@ -28,12 +16,14 @@ from config import (
 
 
 # =================================================
-# Q BUFFER (PRIMARY READY POOL)
+# Q BUFFER
 # =================================================
 
 class QBuffer:
 
     def __init__(self, max_capacity=1000):
+
+        print("\nInitializing QBuffer")
 
         self.max_capacity = max_capacity
 
@@ -42,11 +32,15 @@ class QBuffer:
             KeyRole.DEC: deque()
         })
 
+        # 🔥 Optimized size tracking
+        self.node_sizes = defaultdict(int)
+
         self._lock = threading.Lock()
 
         self.total_added = 0
         self.total_popped = 0
         self.total_expired = 0
+
 
     # -------------------------------------------------
     # ADD KEY
@@ -55,17 +49,21 @@ class QBuffer:
 
         with self._lock:
 
-            if self.total_size(node_id) >= self.max_capacity:
-                return False  # capacity full
+            if self.node_sizes[node_id] >= self.max_capacity:
+                print("QBuffer capacity full")
+                return False
 
             key.state = KeyState.READY
             self.buffers[node_id][key.role].append(key)
 
+            self.node_sizes[node_id] += 1
             self.total_added += 1
+
             return True
 
+
     # -------------------------------------------------
-    # POP KEY (FOR ALLOCATION)
+    # POP KEY
     # -------------------------------------------------
     def pop(self, node_id: str, role: KeyRole):
 
@@ -80,39 +78,47 @@ class QBuffer:
                 if key.is_expired():
                     key.state = KeyState.EXPIRED
                     self.total_expired += 1
+                    self.node_sizes[node_id] -= 1
                     continue
 
                 if key.freshness_score < MIN_FRESHNESS_SCORE:
+                    self.node_sizes[node_id] -= 1
                     continue
 
                 self.total_popped += 1
+                self.node_sizes[node_id] -= 1
+
                 return key
 
             return None
 
+
     # -------------------------------------------------
-    # BUFFER SIZE
+    # SIZE
     # -------------------------------------------------
     def size(self, node_id: str, role: KeyRole):
 
         with self._lock:
             return len(self.buffers[node_id][role])
 
+
     def total_size(self, node_id: str):
 
         with self._lock:
-            return sum(len(pool) for pool in self.buffers[node_id].values())
+            return self.node_sizes[node_id]
+
 
     # -------------------------------------------------
-    # BUFFER PRESSURE
+    # PRESSURE
     # -------------------------------------------------
     def pressure_ratio(self, node_id: str):
 
-        current = self.total_size(node_id)
+        current = self.node_sizes[node_id]
         return current / self.max_capacity
 
+
     # -------------------------------------------------
-    # TTL CLEANUP SWEEP
+    # CLEANUP
     # -------------------------------------------------
     def cleanup(self, node_id: str):
 
@@ -125,13 +131,16 @@ class QBuffer:
 
                 while pool:
                     key = pool.popleft()
+
                     if key.is_expired():
                         key.state = KeyState.EXPIRED
                         self.total_expired += 1
+                        self.node_sizes[node_id] -= 1
                     else:
                         new_pool.append(key)
 
                 self.buffers[node_id][role] = new_pool
+
 
     # -------------------------------------------------
     # METRICS
@@ -146,12 +155,14 @@ class QBuffer:
 
 
 # =================================================
-# S BUFFER (SESSION-RESERVED KEYS)
+# S BUFFER
 # =================================================
 
 class SBuffer:
 
     def __init__(self, max_sessions=500):
+
+        print("Initializing SBuffer")
 
         self.max_sessions = max_sessions
         self.reserved = {}
@@ -161,14 +172,16 @@ class SBuffer:
         self.total_consumed = 0
         self.total_rekeys = 0
 
+
     # -------------------------------------------------
-    # RESERVE KEY
+    # RESERVE
     # -------------------------------------------------
     def reserve(self, key, session_id: str):
 
         with self._lock:
 
             if len(self.reserved) >= self.max_sessions:
+                print("SBuffer session limit reached")
                 return False
 
             key.state = KeyState.RESERVED
@@ -177,10 +190,12 @@ class SBuffer:
 
             self.reserved[session_id] = key
             self.total_reserved += 1
+
             return True
 
+
     # -------------------------------------------------
-    # CONSUME KEY
+    # CONSUME
     # -------------------------------------------------
     def consume(self, session_id: str):
 
@@ -193,6 +208,7 @@ class SBuffer:
                 self.total_consumed += 1
 
             return key
+
 
     # -------------------------------------------------
     # REKEY
@@ -209,6 +225,7 @@ class SBuffer:
 
             return key
 
+
     # -------------------------------------------------
     # SIZE
     # -------------------------------------------------
@@ -216,6 +233,7 @@ class SBuffer:
 
         with self._lock:
             return len(self.reserved)
+
 
     # -------------------------------------------------
     # METRICS

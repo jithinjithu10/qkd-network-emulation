@@ -1,46 +1,29 @@
 """
-link_manager.py
----------------
-
 Research-Grade QKD Physical Link Manager
-Quantum-Aware | Distance-Aware | Attack-Ready
-Weeks 7–12 Advanced Physical Simulation
+DEBUG INSTRUMENTED VERSION
 """
 
 import math
 import random
 from datetime import datetime, timezone
-from models import LinkStatus
-from config import DEFAULT_LINK_RATE
+
+from qkd_research_platform_v1.core.models import LinkStatus
+from qkd_research_platform_v1.config import DEFAULT_LINK_RATE
 
 
 class LinkManager:
 
     def __init__(self):
 
-        # Format:
-        # {
-        #   "A-B": {
-        #       node_a,
-        #       node_b,
-        #       base_rate,
-        #       effective_rate,
-        #       latency_ms,
-        #       distance_km,
-        #       attenuation_db,
-        #       qber,
-        #       noise_probability,
-        #       packet_loss_probability,
-        #       status,
-        #       traffic_count,
-        #       last_updated
-        #   }
-        # }
+        print("\n=== Initializing LinkManager ===")
 
         self.links = {}
 
+        print("LinkManager initialized")
+
+
     # =================================================
-    # CREATE / UPDATE LINK (Physics-Aware)
+    # CREATE / UPDATE LINK
     # =================================================
     def update_link(
         self,
@@ -52,6 +35,8 @@ class LinkManager:
         attenuation_db=0.2,
         status=None
     ):
+
+        print(f"\nUpdating physical link {node_a} <-> {node_b}")
 
         if not base_rate:
             base_rate = DEFAULT_LINK_RATE
@@ -66,6 +51,11 @@ class LinkManager:
         )
 
         qber = self._calculate_qber(distance_km)
+
+        print(f"Base rate: {base_rate}")
+        print(f"Effective rate: {effective_rate}")
+        print(f"Distance: {distance_km} km")
+        print(f"QBER: {qber}")
 
         key = self._normalize_key(node_a, node_b)
 
@@ -87,22 +77,33 @@ class LinkManager:
 
         return {"status": "LINK_UPDATED", "link": key}
 
+
     # =================================================
     # PHYSICAL MODELS
     # =================================================
     def _calculate_effective_rate(self, base_rate, distance_km, attenuation_db):
 
-        # Exponential attenuation model
         attenuation_factor = math.exp(-attenuation_db * distance_km / 100)
-        return base_rate * attenuation_factor
+
+        rate = base_rate * attenuation_factor
+
+        print(f"Calculated attenuation factor: {attenuation_factor}")
+        print(f"Effective rate computed: {rate}")
+
+        return rate
+
 
     def _calculate_qber(self, distance_km):
 
-        # Simple increasing QBER model
         base_qber = 0.01
         distance_factor = distance_km / 1000
 
-        return min(0.15, base_qber + distance_factor)
+        qber = min(0.15, base_qber + distance_factor)
+
+        print(f"Calculated QBER: {qber}")
+
+        return qber
+
 
     # =================================================
     # GET LINK
@@ -110,29 +111,26 @@ class LinkManager:
     def get_link(self, node_a, node_b):
 
         key = self._normalize_key(node_a, node_b)
-        return self.links.get(key)
+
+        link = self.links.get(key)
+
+        if not link:
+            print(f"Link {key} not found")
+
+        return link
+
 
     # =================================================
-    # RECORD TRAFFIC
-    # =================================================
-    def record_traffic(self, node_a, node_b):
-
-        key = self._normalize_key(node_a, node_b)
-
-        if key in self.links:
-            self.links[key]["traffic_count"] += 1
-            return True
-
-        return False
-
-    # =================================================
-    # DEGRADE LINK (Dynamic Physics Impact)
+    # DEGRADE LINK
     # =================================================
     def degrade_link(self, node_a, node_b, severity=0.5):
+
+        print(f"\nDegrading link {node_a}-{node_b}")
 
         key = self._normalize_key(node_a, node_b)
 
         if key not in self.links:
+            print("Link not found")
             return {"error": "LINK_NOT_FOUND"}
 
         link = self.links[key]
@@ -142,16 +140,23 @@ class LinkManager:
         link["status"] = LinkStatus.DEGRADED.value
         link["last_updated"] = datetime.now(timezone.utc).isoformat()
 
+        print("Link degraded. New effective rate:", link["effective_rate"])
+        print("New QBER:", link["qber"])
+
         return {"status": "LINK_DEGRADED"}
 
+
     # =================================================
-    # ATTACK SIMULATION (Novel)
+    # ATTACK SIMULATION
     # =================================================
     def inject_eavesdropping(self, node_a, node_b):
+
+        print(f"\nInjecting eavesdropping on {node_a}-{node_b}")
 
         key = self._normalize_key(node_a, node_b)
 
         if key not in self.links:
+            print("Link not found")
             return {"error": "LINK_NOT_FOUND"}
 
         link = self.links[key]
@@ -161,29 +166,42 @@ class LinkManager:
         link["effective_rate"] *= 0.7
         link["status"] = LinkStatus.DEGRADED.value
 
+        print("Eavesdropping simulated")
+        print("New QBER:", link["qber"])
+        print("New effective rate:", link["effective_rate"])
+
         return {"status": "EAVESDROPPING_SIMULATED"}
+
 
     # =================================================
     # FAIL LINK
     # =================================================
     def fail_link(self, node_a, node_b):
 
+        print(f"\nFailing link {node_a}-{node_b}")
+
         key = self._normalize_key(node_a, node_b)
 
         if key not in self.links:
+            print("Link not found")
             return {"error": "LINK_NOT_FOUND"}
 
         self.links[key]["status"] = LinkStatus.UNAVAILABLE.value
+
         return {"status": "LINK_FAILED"}
+
 
     # =================================================
     # RESTORE LINK
     # =================================================
     def restore_link(self, node_a, node_b):
 
+        print(f"\nRestoring link {node_a}-{node_b}")
+
         key = self._normalize_key(node_a, node_b)
 
         if key not in self.links:
+            print("Link not found")
             return {"error": "LINK_NOT_FOUND"}
 
         link = self.links[key]
@@ -199,10 +217,13 @@ class LinkManager:
 
         return {"status": "LINK_RESTORED"}
 
+
     # =================================================
     # CAPACITY CHECK
     # =================================================
     def is_capacity_available(self, node_a, node_b, required_rate):
+
+        print(f"\nChecking capacity {node_a}-{node_b}")
 
         link = self.get_link(node_a, node_b)
 
@@ -210,15 +231,24 @@ class LinkManager:
             return False
 
         if link["status"] != LinkStatus.AVAILABLE.value:
+            print("Link not available")
             return False
 
+        print("Effective rate:", link["effective_rate"])
+        print("Required rate:", required_rate)
+
         return link["effective_rate"] >= required_rate
+
 
     # =================================================
     # LIST LINKS
     # =================================================
     def list_links(self):
+
+        print("Listing all links")
+
         return self.links
+
 
     # =================================================
     # NORMALIZE KEY

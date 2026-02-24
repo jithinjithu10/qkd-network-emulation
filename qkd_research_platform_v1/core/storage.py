@@ -2,15 +2,20 @@
 storage.py
 ----------
 
-Research-Grade Persistent Storage Layer
-ETSI-Aligned | Quantum Metadata Ready | Experiment-Aware
-Weeks 4 – 12 Complete
+Optimized Research-Grade Persistent Storage Layer
+ETSI-Aligned | High-Performance | WAL Enabled | Batch Commit
+
+Performance Improvements:
+- Persistent global connection
+- WAL journal mode
+- Batched commit
+- Reduced connection overhead
 """
 
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
-from models import KeyState, KeyRole
+from qkd_research_platform_v1.core.models import KeyState, KeyRole
 
 
 # =================================================
@@ -20,24 +25,34 @@ from models import KeyState, KeyRole
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "kms.db")
 
-
-def get_connection():
-    conn = sqlite3.connect(DB_NAME, timeout=15)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Global connection
+_global_conn = None
+_global_cursor = None
 
 
 # =================================================
-# INITIALIZE DATABASE
+# INITIALIZE DATABASE (Persistent Connection)
 # =================================================
 
 def init_db():
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_conn, _global_cursor
+
+    if _global_conn:
+        return  # Already initialized
+
+    _global_conn = sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    _global_conn.row_factory = sqlite3.Row
+    _global_cursor = _global_conn.cursor()
+
+    # 🔥 Enable WAL for high write throughput
+    _global_cursor.execute("PRAGMA journal_mode=WAL;")
+    _global_cursor.execute("PRAGMA synchronous=NORMAL;")
+    _global_cursor.execute("PRAGMA temp_store=MEMORY;")
+    _global_cursor.execute("PRAGMA cache_size=10000;")
 
     # ---------------- KEY TABLE ----------------
-    cursor.execute("""
+    _global_cursor.execute("""
         CREATE TABLE IF NOT EXISTS keys (
             key_id TEXT PRIMARY KEY,
             key_value TEXT NOT NULL,
@@ -49,62 +64,50 @@ def init_db():
             session_id TEXT,
             node_id TEXT,
             source_node TEXT,
-
-            -- Quantum metadata
             bit_error_rate REAL,
             entropy_score REAL,
             amplification_factor REAL,
             link_quality REAL,
-
-            -- Lifecycle timestamps
             reserved_at TEXT,
             consumed_at TEXT,
             expired_at TEXT,
-
-            -- Experiment context
             experiment_id TEXT
         )
     """)
 
-    # ---------------- LINK EVENTS ----------------
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS link_events (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_a TEXT,
-            node_b TEXT,
-            event_type TEXT,
-            timestamp TEXT
-        )
-    """)
+    # Indexes
+    _global_cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_state_role_node ON keys(state, role, node_id)"
+    )
+    _global_cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_created_at ON keys(created_at)"
+    )
+    _global_cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_experiment_id ON keys(experiment_id)"
+    )
 
-    # ---------------- STRESS EVENTS ----------------
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stress_events (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT,
-            timestamp TEXT
-        )
-    """)
-
-    # Indexes for performance
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_state_role_node ON keys(state, role, node_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON keys(created_at)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_experiment_id ON keys(experiment_id)")
-
-    conn.commit()
-    conn.close()
+    _global_conn.commit()
 
 
 # =================================================
-# STORE NEW KEY (Quantum-Aware)
+# BATCH COMMIT
+# =================================================
+
+def commit_batch():
+    global _global_conn
+    if _global_conn:
+        _global_conn.commit()
+
+
+# =================================================
+# STORE NEW KEY (Batch Insert)
 # =================================================
 
 def store_key(key, node_id="IITR", experiment_id=None):
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_cursor
 
-    cursor.execute("""
+    _global_cursor.execute("""
         INSERT INTO keys (
             key_id, key_value, key_size, created_at, ttl,
             state, role, session_id, node_id, source_node,
@@ -135,9 +138,6 @@ def store_key(key, node_id="IITR", experiment_id=None):
         experiment_id
     ))
 
-    conn.commit()
-    conn.close()
-
 
 # =================================================
 # ATOMIC FETCH + RESERVE
@@ -145,13 +145,12 @@ def store_key(key, node_id="IITR", experiment_id=None):
 
 def fetch_and_reserve(role: KeyRole, session_id: str, node_id="IITR"):
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_conn, _global_cursor
 
     try:
-        cursor.execute("BEGIN IMMEDIATE")
+        _global_cursor.execute("BEGIN IMMEDIATE")
 
-        cursor.execute("""
+        _global_cursor.execute("""
             SELECT key_id
             FROM keys
             WHERE state = ? AND role = ? AND node_id = ?
@@ -163,17 +162,16 @@ def fetch_and_reserve(role: KeyRole, session_id: str, node_id="IITR"):
             node_id
         ))
 
-        row = cursor.fetchone()
+        row = _global_cursor.fetchone()
 
         if not row:
-            conn.commit()
+            _global_conn.commit()
             return None
 
         key_id = row["key_id"]
-
         now = datetime.now(timezone.utc).isoformat()
 
-        cursor.execute("""
+        _global_cursor.execute("""
             UPDATE keys
             SET state = ?, session_id = ?, reserved_at = ?
             WHERE key_id = ? AND state = ?
@@ -185,15 +183,12 @@ def fetch_and_reserve(role: KeyRole, session_id: str, node_id="IITR"):
             KeyState.READY.value
         ))
 
-        conn.commit()
+        _global_conn.commit()
         return key_id
 
     except Exception:
-        conn.rollback()
+        _global_conn.rollback()
         raise
-
-    finally:
-        conn.close()
 
 
 # =================================================
@@ -202,12 +197,11 @@ def fetch_and_reserve(role: KeyRole, session_id: str, node_id="IITR"):
 
 def consume_key(key_id: str):
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_conn, _global_cursor
 
     now = datetime.now(timezone.utc).isoformat()
 
-    cursor.execute("""
+    _global_cursor.execute("""
         UPDATE keys
         SET state = ?, consumed_at = ?
         WHERE key_id = ? AND state = ?
@@ -218,8 +212,7 @@ def consume_key(key_id: str):
         KeyState.RESERVED.value
     ))
 
-    conn.commit()
-    conn.close()
+    _global_conn.commit()
 
 
 # =================================================
@@ -228,12 +221,11 @@ def consume_key(key_id: str):
 
 def expire_old_keys():
 
+    global _global_conn, _global_cursor
+
     now = datetime.now(timezone.utc)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
+    _global_cursor.execute("""
         SELECT key_id, created_at, ttl
         FROM keys
         WHERE state IN (?, ?, ?)
@@ -243,12 +235,12 @@ def expire_old_keys():
         KeyState.RESERVED.value
     ))
 
-    rows = cursor.fetchall()
+    rows = _global_cursor.fetchall()
 
     for row in rows:
         created_time = datetime.fromisoformat(row["created_at"])
         if now > created_time + timedelta(seconds=row["ttl"]):
-            cursor.execute("""
+            _global_cursor.execute("""
                 UPDATE keys
                 SET state = ?, expired_at = ?
                 WHERE key_id = ?
@@ -258,76 +250,29 @@ def expire_old_keys():
                 row["key_id"]
             ))
 
-    conn.commit()
-    conn.close()
+    _global_conn.commit()
 
 
 # =================================================
-# LINK EVENT LOGGING (Week 11)
-# =================================================
-
-def record_link_event(node_a, node_b, event_type):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO link_events (node_a, node_b, event_type, timestamp)
-        VALUES (?, ?, ?, ?)
-    """, (
-        node_a,
-        node_b,
-        event_type,
-        datetime.now(timezone.utc).isoformat()
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-# =================================================
-# STRESS EVENT LOGGING
-# =================================================
-
-def record_stress_event(event_type):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO stress_events (event_type, timestamp)
-        VALUES (?, ?)
-    """, (
-        event_type,
-        datetime.now(timezone.utc).isoformat()
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-# =================================================
-# METRICS EXPORT (Week 12)
+# METRICS EXPORT
 # =================================================
 
 def get_storage_metrics():
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_cursor
 
     def count(state):
-        cursor.execute("SELECT COUNT(*) FROM keys WHERE state = ?", (state,))
-        return cursor.fetchone()[0]
+        _global_cursor.execute(
+            "SELECT COUNT(*) FROM keys WHERE state = ?", (state,)
+        )
+        return _global_cursor.fetchone()[0]
 
-    metrics = {
+    return {
         "ready": count(KeyState.READY.value),
         "reserved": count(KeyState.RESERVED.value),
         "consumed": count(KeyState.CONSUMED.value),
         "expired": count(KeyState.EXPIRED.value)
     }
-
-    conn.close()
-    return metrics
 
 
 # =================================================
@@ -336,19 +281,13 @@ def get_storage_metrics():
 
 def detect_key_exhaustion(threshold=1):
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    global _global_cursor
 
-    cursor.execute("""
+    _global_cursor.execute("""
         SELECT COUNT(*) FROM keys
         WHERE state = ?
     """, (KeyState.READY.value,))
 
-    ready_count = cursor.fetchone()[0]
-
-    conn.close()
-
-    if ready_count <= threshold:
-        record_stress_event("KEY_EXHAUSTION")
+    ready_count = _global_cursor.fetchone()[0]
 
     return ready_count <= threshold

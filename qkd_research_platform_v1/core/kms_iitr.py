@@ -5,6 +5,7 @@ kms_iitr.py
 Research-Grade Central KMS
 Buffer-First | Adaptive | Mode-Switchable | Experiment-Ready
 With Structured QBER Logging & Statistical Support
+Optimized for High-Throughput Key Generation
 """
 
 from fastapi import FastAPI, HTTPException
@@ -17,7 +18,11 @@ import time
 
 from qkd_research_platform_v1.core.models import Key, KeyRole
 from qkd_research_platform_v1.core.buffers import QBuffer, SBuffer
-from qkd_research_platform_v1.core.storage import init_db, store_key
+from qkd_research_platform_v1.core.storage import (
+    init_db,
+    store_key,
+    commit_batch
+)
 from qkd_research_platform_v1.core.audit import (
     log_event,
     log_key_event,
@@ -90,9 +95,8 @@ def simulate_quantum_key(key_size: int):
     key_bytes = key_size // 8
     key_value = secrets.token_bytes(key_bytes).hex()
 
-    # Realistic Gaussian QBER around 5%
+    # Gaussian QBER around 5%
     qber = abs(random.gauss(0.05, 0.02))
-
     entropy = random.uniform(0.85, 1.0)
     amplification = random.uniform(0.9, 1.0)
     link_quality = 1 - qber
@@ -116,7 +120,7 @@ def get_status():
 
 
 # =================================================
-# GENERATE KEYS
+# GENERATE KEYS (Optimized Batch Mode)
 # =================================================
 
 @app.post("/api/v1/keys/generate")
@@ -155,9 +159,9 @@ def generate_keys(request: dict):
         if not qbuffer.add(NODE_ID, key):
             break
 
+        # Insert into DB (no immediate commit)
         store_key(key, node_id=NODE_ID)
 
-        # Structured QBER logging
         log_key_event(
             f"Generated {key.key_id}",
             metadata={
@@ -170,6 +174,9 @@ def generate_keys(request: dict):
         )
 
         generated.append({"key_id": key.key_id})
+
+    # 🔥 Single disk commit for all inserts
+    commit_batch()
 
     return {
         "status": "GENERATED",
@@ -206,7 +213,6 @@ def allocate_key(request: dict):
 
     if not valid:
 
-        # Log rejection with physics metadata
         log_policy_event(
             f"Key rejected {key.key_id}",
             metadata={

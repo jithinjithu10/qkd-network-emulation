@@ -1,11 +1,6 @@
 """
-controller.py
---------------
-
 Research-Grade QKD Network Controller
-Graph-Based | Link-Aware | Exhaustion-Aware
-ETSI Control Plane | Experiment Ready
-Weeks 7–12 Advanced Implementation
+DEBUG INSTRUMENTED VERSION
 """
 
 import requests
@@ -14,23 +9,23 @@ import time
 from datetime import datetime
 from collections import defaultdict, deque
 
-from node_registry import NodeRegistry
-from link_manager import LinkManager
-from models import LinkStatus
-from audit import log_network_event
+from qkd_research_platform_v1.controller.node_registry import NodeRegistry
+from qkd_research_platform_v1.controller.link_manager import LinkManager
+from qkd_research_platform_v1.core.models import LinkStatus
+from qkd_research_platform_v1.core.audit import log_network_event
 
 
 class QKDController:
 
     def __init__(self):
 
+        print("\n=== Initializing QKDController ===")
+
         self.registry = NodeRegistry()
         self.link_manager = LinkManager()
 
-        # Graph representation
-        self.graph = defaultdict(list)
+        self.graph = defaultdict(set)  # FIX: use set to avoid duplicates
 
-        # Metrics
         self.metrics = {
             "total_forwarded_requests": 0,
             "failed_requests": 0,
@@ -40,25 +35,36 @@ class QKDController:
             "rerouted_due_to_exhaustion": 0
         }
 
+        print("Controller initialized successfully")
+
+
     # =================================================
     # NODE REGISTRATION
     # =================================================
     def register_node(self, node_id, ip_address):
 
+        print(f"\nRegistering node: {node_id} ({ip_address})")
+
         response = self.registry.register(node_id, ip_address)
+
         log_network_event(f"[REGISTER] Node={node_id}")
 
         return response
+
 
     # =================================================
     # LINK UPDATE
     # =================================================
     def update_link(self, node_a, node_b, rate, status):
 
+        print(f"\nUpdating link {node_a}<->{node_b}")
+        print(f"Rate: {rate}, Status: {status}")
+
         self.link_manager.update_link(node_a, node_b, rate, status)
 
-        self.graph[node_a].append(node_b)
-        self.graph[node_b].append(node_a)
+        # Avoid duplicates
+        self.graph[node_a].add(node_b)
+        self.graph[node_b].add(node_a)
 
         log_network_event(
             f"[LINK UPDATE] {node_a}<->{node_b} | Rate={rate} | Status={status}"
@@ -66,20 +72,26 @@ class QKDController:
 
         return {"status": "LINK_UPDATED"}
 
+
     # =================================================
     # TOPOLOGY VIEW
     # =================================================
     def get_topology(self):
+
+        print("\nFetching topology")
 
         return {
             "nodes": self.registry.list_nodes(),
             "links": self.link_manager.list_links()
         }
 
+
     # =================================================
     # SHORTEST PATH (BFS)
     # =================================================
     def _find_path(self, source, destination):
+
+        print(f"\nFinding path from {source} to {destination}")
 
         visited = set()
         queue = deque([(source, [source])])
@@ -88,6 +100,7 @@ class QKDController:
             node, path = queue.popleft()
 
             if node == destination:
+                print("Path found:", path)
                 return path
 
             visited.add(node)
@@ -96,39 +109,55 @@ class QKDController:
                 if neighbor not in visited:
                     queue.append((neighbor, path + [neighbor]))
 
+        print("No route found")
         return None
+
 
     # =================================================
     # LINK QUALITY CHECK
     # =================================================
     def _validate_path(self, path):
 
+        print("Validating path:", path)
+
         for i in range(len(path) - 1):
+
             link = self.link_manager.get_link(path[i], path[i+1])
 
             if not link:
+                print("Link not found:", path[i], path[i+1])
                 return False, "LINK_NOT_FOUND"
 
             if link["status"] == LinkStatus.UNAVAILABLE.value:
+                print("Link unavailable:", path[i], path[i+1])
                 self.metrics["unavailable_link_blocks"] += 1
                 return False, "LINK_UNAVAILABLE"
 
             if link["status"] == LinkStatus.DEGRADED.value:
+                print("Link degraded:", path[i], path[i+1])
                 self.metrics["degraded_routing_events"] += 1
-                time.sleep(random.uniform(0.5, 1.2))
+                time.sleep(random.uniform(0.3, 0.8))
 
         return True, "VALID"
 
+
     # =================================================
-    # FORWARD REQUEST (Multi-Hop)
+    # FORWARD REQUEST
     # =================================================
     def forward_request(self, source_node, destination_node, token, endpoint, payload=None):
 
+        print(f"\n=== FORWARD REQUEST ===")
+        print(f"Source: {source_node}")
+        print(f"Destination: {destination_node}")
+        print(f"Endpoint: {endpoint}")
+
         if not self.registry.get_node(source_node):
+            print("Source not found")
             self.metrics["failed_requests"] += 1
             return {"error": "SOURCE_NOT_FOUND"}
 
         if not self.registry.get_node(destination_node):
+            print("Destination not found")
             self.metrics["failed_requests"] += 1
             return {"error": "DESTINATION_NOT_FOUND"}
 
@@ -144,10 +173,10 @@ class QKDController:
         valid, reason = self._validate_path(path)
 
         if not valid:
+            print("Path validation failed:", reason)
             return {"error": reason}
 
         dest = self.registry.get_node(destination_node)
-
         url = f"http://{dest['ip']}:8001{endpoint}"
 
         headers = {
@@ -165,6 +194,8 @@ class QKDController:
 
             latency = time.time() - start
 
+            print("Forwarded successfully. Latency:", latency)
+
             self.metrics["total_forwarded_requests"] += 1
 
             log_network_event(
@@ -176,53 +207,20 @@ class QKDController:
 
         except Exception as e:
 
+            print("Forwarding error:", e)
+
             self.metrics["failed_requests"] += 1
             log_network_event(f"[ERROR] {str(e)}")
 
             return {"error": str(e)}
 
-    # =================================================
-    # LINK DEGRADATION SIMULATION
-    # =================================================
-    def simulate_link_degradation(self, node_a, node_b, probability=0.2):
-
-        link = self.link_manager.get_link(node_a, node_b)
-
-        if not link:
-            return {"status": "LINK_NOT_FOUND"}
-
-        if random.random() < probability:
-            self.link_manager.degrade_link(node_a, node_b, link["rate"] * 0.5)
-            return {"status": "DEGRADED"}
-
-        self.link_manager.restore_link(node_a, node_b)
-        return {"status": "AVAILABLE"}
-
-    # =================================================
-    # EXHAUSTION-AWARE REROUTING
-    # =================================================
-    def reroute_if_exhausted(self, source_node, token, endpoint):
-
-        nodes = self.registry.list_nodes()
-
-        for node_id in nodes:
-            response = self.forward_request(
-                source_node,
-                node_id,
-                token,
-                endpoint
-            )
-
-            if response.get("status") == "KEY_AVAILABLE":
-                self.metrics["rerouted_due_to_exhaustion"] += 1
-                return response
-
-        return {"error": "ALL_NODES_EXHAUSTED"}
 
     # =================================================
     # METRICS EXPORT
     # =================================================
     def get_metrics(self):
+
+        print("\nController Metrics Requested")
 
         return {
             "timestamp": datetime.utcnow().isoformat(),

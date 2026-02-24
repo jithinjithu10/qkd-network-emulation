@@ -1,17 +1,6 @@
 """
-audit.py
----------
-
 Research-Grade Audit Logging System
-ETSI-Aligned | Experiment-Aware | Metrics-Ready
-
-Enhancements:
-- High resolution timestamps
-- Experiment tagging
-- Policy mode tracking
-- Buffer pressure logging
-- Latency tracking support
-- JSON-first structured logging
+PERFORMANCE OPTIMIZED + DEBUG MODE
 """
 
 import os
@@ -36,7 +25,15 @@ JSON_LOGGING = os.getenv("QKD_JSON_LOGGING", "true").lower() == "true"
 
 EXPERIMENT_ID = os.getenv("QKD_EXPERIMENT_ID", "default_experiment")
 
+# ⚠ PERFORMANCE SWITCH
+ENABLE_AUDIT_LOGGING = os.getenv("QKD_ENABLE_AUDIT", "true").lower() == "true"
+
+# Batch mode (reduces disk I/O)
+ENABLE_BATCH_MODE = os.getenv("QKD_BATCH_AUDIT", "true").lower() == "true"
+BATCH_SIZE = 50
+
 _log_lock = threading.Lock()
+_log_buffer = []
 
 
 # =================================================
@@ -54,9 +51,12 @@ def log_event(
     metadata: dict | None = None
 ):
     """
-    Central structured audit logger.
-    High precision timestamp + experiment tagging.
+    Structured audit logger.
+    Performance-aware version.
     """
+
+    if not ENABLE_AUDIT_LOGGING:
+        return
 
     timestamp = datetime.now(timezone.utc).isoformat()
     monotonic_time = time.time()
@@ -76,7 +76,7 @@ def log_event(
     }
 
     if JSON_LOGGING:
-        log_line = json.dumps(log_entry) + "\n"
+        log_line = json.dumps(log_entry)
     else:
         log_line = (
             f"[{timestamp}] "
@@ -84,16 +84,62 @@ def log_event(
             f"[mode={policy_mode}] "
             f"[lat={latency}] "
             f"[pressure={pressure}] "
-            f"{message}\n"
+            f"{message}"
         )
 
-    with _log_lock:
-        with open(AUDIT_FILE, "a", encoding="utf-8") as f:
-            f.write(log_line)
+    if ENABLE_BATCH_MODE:
+        _buffer_log(log_line)
+    else:
+        _write_direct(log_line)
 
 
 # =================================================
-# SPECIALIZED LOG HELPERS
+# BUFFERED WRITE
+# =================================================
+
+def _buffer_log(line):
+
+    global _log_buffer
+
+    with _log_lock:
+
+        _log_buffer.append(line)
+
+        if len(_log_buffer) >= BATCH_SIZE:
+            _flush_buffer()
+
+
+def _flush_buffer():
+
+    global _log_buffer
+
+    if not _log_buffer:
+        return
+
+    print(f"Flushing {_log_buffer.__len__()} audit logs to disk")
+
+    with open(AUDIT_FILE, "a", encoding="utf-8") as f:
+        for line in _log_buffer:
+            f.write(line + "\n")
+
+    _log_buffer.clear()
+
+
+# =================================================
+# DIRECT WRITE (SLOWER)
+# =================================================
+
+def _write_direct(line):
+
+    print("Direct audit write")
+
+    with _log_lock:
+        with open(AUDIT_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+
+# =================================================
+# SPECIALIZED HELPERS
 # =================================================
 
 def log_key_event(message: str, **kwargs):
