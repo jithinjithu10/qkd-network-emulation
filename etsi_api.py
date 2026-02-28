@@ -1,7 +1,8 @@
 """
 etsi_api.py
 
-Strict ETSI-aligned Service Interface.
+Strict ETSI-aligned Service Interface
+with Bearer Token Authentication.
 
 Implements:
 - GET /etsi/v1/status
@@ -12,12 +13,19 @@ Implements:
 - POST /etsi/v1/close_session
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from buffers import QBuffer
 from session_manager import SessionManager
 from audit import AuditLogger
 from models import Key
-from config import KEY_SIZE, DEFAULT_TTL_SECONDS, SESSION_TIMEOUT_SECONDS, INITIAL_KEY_POOL_SIZE
+from config import (
+    KEY_SIZE,
+    DEFAULT_TTL_SECONDS,
+    SESSION_TIMEOUT_SECONDS,
+    INITIAL_KEY_POOL_SIZE,
+    AUTH_ENABLED,
+    AUTH_TOKEN
+)
 import uuid
 import secrets
 
@@ -31,6 +39,27 @@ router = APIRouter()
 buffer = QBuffer()
 session_manager = SessionManager(SESSION_TIMEOUT_SECONDS)
 audit = AuditLogger()
+
+
+# =================================================
+# AUTHENTICATION CHECK
+# =================================================
+
+def _validate_auth(authorization: str | None):
+
+    if not AUTH_ENABLED:
+        return
+
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
+
+    token = authorization.split(" ")[1]
+
+    if token != AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
 # =================================================
@@ -55,7 +84,10 @@ _preload_keys()
 # =================================================
 
 @router.get("/etsi/v1/status")
-def status():
+def status(authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
+
     return {
         "service": "ETSI-KMS",
         "status": "RUNNING"
@@ -67,7 +99,9 @@ def status():
 # =================================================
 
 @router.post("/etsi/v1/open_session")
-def open_session():
+def open_session(authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
 
     session_id = session_manager.create_session()
     audit.session_created(session_id)
@@ -82,7 +116,9 @@ def open_session():
 # =================================================
 
 @router.post("/etsi/v1/reserve")
-def reserve(request: dict):
+def reserve(request: dict, authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
 
     session_id = request.get("session_id")
 
@@ -112,7 +148,9 @@ def reserve(request: dict):
 # =================================================
 
 @router.post("/etsi/v1/get_key")
-def get_key(request: dict):
+def get_key(request: dict, authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
 
     session_id = request.get("session_id")
 
@@ -141,7 +179,9 @@ def get_key(request: dict):
 # =================================================
 
 @router.post("/etsi/v1/consume")
-def consume(request: dict):
+def consume(request: dict, authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
 
     session_id = request.get("session_id")
 
@@ -171,7 +211,9 @@ def consume(request: dict):
 # =================================================
 
 @router.post("/etsi/v1/close_session")
-def close_session(request: dict):
+def close_session(request: dict, authorization: str | None = Header(default=None)):
+
+    _validate_auth(authorization)
 
     session_id = request.get("session_id")
 
