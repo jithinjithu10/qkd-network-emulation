@@ -2,7 +2,7 @@
 etsi_api.py
 
 Strict ETSI-aligned Service Interface
-with Bearer Token Authentication.
+with proper HTTPBearer Authentication.
 
 Implements:
 - GET /etsi/v1/status
@@ -13,7 +13,8 @@ Implements:
 - POST /etsi/v1/close_session
 """
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from buffers import QBuffer
 from session_manager import SessionManager
 from audit import AuditLogger
@@ -40,26 +41,33 @@ buffer = QBuffer()
 session_manager = SessionManager(SESSION_TIMEOUT_SECONDS)
 audit = AuditLogger()
 
+security = HTTPBearer()
+
 
 # =================================================
-# AUTHENTICATION CHECK
+# AUTHENTICATION DEPENDENCY
 # =================================================
 
-def _validate_auth(authorization: str | None):
+def verify_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
 
     if not AUTH_ENABLED:
-        return
+        return True
 
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header missing")
+    if credentials.scheme != "Bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication scheme"
+        )
 
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
+    if credentials.credentials != AUTH_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token"
+        )
 
-    token = authorization.split(" ")[1]
-
-    if token != AUTH_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
+    return True
 
 
 # =================================================
@@ -84,9 +92,7 @@ _preload_keys()
 # =================================================
 
 @router.get("/etsi/v1/status")
-def status(authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def status(auth: bool = Depends(verify_token)):
 
     return {
         "service": "ETSI-KMS",
@@ -99,9 +105,7 @@ def status(authorization: str | None = Header(default=None)):
 # =================================================
 
 @router.post("/etsi/v1/open_session")
-def open_session(authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def open_session(auth: bool = Depends(verify_token)):
 
     session_id = session_manager.create_session()
     audit.session_created(session_id)
@@ -116,9 +120,10 @@ def open_session(authorization: str | None = Header(default=None)):
 # =================================================
 
 @router.post("/etsi/v1/reserve")
-def reserve(request: dict, authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def reserve(
+    request: dict,
+    auth: bool = Depends(verify_token)
+):
 
     session_id = request.get("session_id")
 
@@ -148,9 +153,10 @@ def reserve(request: dict, authorization: str | None = Header(default=None)):
 # =================================================
 
 @router.post("/etsi/v1/get_key")
-def get_key(request: dict, authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def get_key(
+    request: dict,
+    auth: bool = Depends(verify_token)
+):
 
     session_id = request.get("session_id")
 
@@ -179,9 +185,10 @@ def get_key(request: dict, authorization: str | None = Header(default=None)):
 # =================================================
 
 @router.post("/etsi/v1/consume")
-def consume(request: dict, authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def consume(
+    request: dict,
+    auth: bool = Depends(verify_token)
+):
 
     session_id = request.get("session_id")
 
@@ -211,9 +218,10 @@ def consume(request: dict, authorization: str | None = Header(default=None)):
 # =================================================
 
 @router.post("/etsi/v1/close_session")
-def close_session(request: dict, authorization: str | None = Header(default=None)):
-
-    _validate_auth(authorization)
+def close_session(
+    request: dict,
+    auth: bool = Depends(verify_token)
+):
 
     session_id = request.get("session_id")
 
