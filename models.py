@@ -3,9 +3,9 @@ models.py
 
 Strict ETSI-aligned core data models.
 
-Implements:
-- Key lifecycle state machine
-- Session abstraction
+Hybrid-compatible:
+- Supports ETSI atomic delivery (READY → CONSUMED)
+- Supports reservation lifecycle (READY → RESERVED → CONSUMED)
 """
 
 from enum import Enum
@@ -32,7 +32,13 @@ class Key:
     Represents a cryptographic key managed by KMS.
     """
 
-    def __init__(self, key_id: str, key_value: str, key_size: int, ttl_seconds: int):
+    def __init__(
+        self,
+        key_id: str,
+        key_value: str,
+        key_size: int,
+        ttl_seconds: int
+    ):
 
         self.key_id = key_id
         self.key_value = key_value
@@ -52,10 +58,13 @@ class Key:
         return datetime.now(timezone.utc) > (self.created_at + self.ttl)
 
     # -------------------------------------------------
-    # STATE TRANSITION VALIDATION
+    # STATE TRANSITIONS
     # -------------------------------------------------
 
     def reserve(self, session_id: str):
+        """
+        READY → RESERVED
+        """
 
         if self.state != KeyState.READY:
             raise ValueError("Invalid state transition: Key not in READY state")
@@ -68,27 +77,38 @@ class Key:
         self.session_id = session_id
 
     def consume(self):
+        """
+        Supports:
+        READY → CONSUMED  (ETSI atomic mode)
+        RESERVED → CONSUMED (Session mode)
+        """
 
-        if self.state != KeyState.RESERVED:
-            raise ValueError("Invalid state transition: Key not in RESERVED state")
+        if self.state not in [KeyState.READY, KeyState.RESERVED]:
+            raise ValueError("Invalid state transition to CONSUMED")
 
         self.state = KeyState.CONSUMED
+        self.session_id = None
 
     def expire(self):
+        """
+        Any non-consumed key can expire.
+        """
 
-        if self.state in [KeyState.CONSUMED, KeyState.EXPIRED]:
+        if self.state == KeyState.CONSUMED:
             return
 
         self.state = KeyState.EXPIRED
+        self.session_id = None
 
 
 # =================================================
-# SESSION MODEL
+# SESSION MODEL (Internal Use)
 # =================================================
 
 class Session:
     """
     Represents ETSI session between application and KMS.
+    Internal abstraction (not part of ETSI external API).
     """
 
     def __init__(self, session_id: str, timeout_seconds: int):
@@ -99,7 +119,7 @@ class Session:
         self.active = True
 
     # -------------------------------------------------
-    # SESSION EXPIRY CHECK
+    # SESSION VALIDATION
     # -------------------------------------------------
 
     def is_expired(self) -> bool:
