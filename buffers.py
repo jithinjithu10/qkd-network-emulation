@@ -1,13 +1,13 @@
 """
 buffers.py
 
-Strict ETSI-aligned key buffer management.
+Hybrid ETSI-aligned key buffer management.
 
-Implements:
-- READY key pool
-- Reservation handling
-- TTL enforcement
-- Strict lifecycle transitions
+Internal lifecycle:
+READY → RESERVED → CONSUMED
+
+Externally supports:
+- Atomic ETSI get_key()
 """
 
 from collections import deque
@@ -31,11 +31,34 @@ class QBuffer:
     def add_key(self, key: Key):
         if key.state != KeyState.READY:
             raise ValueError("Only READY keys can be added to buffer")
-
         self._ready_queue.append(key)
 
     # =================================================
-    # RESERVE KEY
+    # ETSI ATOMIC FETCH (v2 compliant)
+    # =================================================
+
+    def get_next_key(self) -> Optional[Key]:
+        """
+        ETSI-compliant atomic key retrieval.
+        Removes key from READY and marks CONSUMED immediately.
+        """
+
+        self._cleanup_expired_keys()
+
+        while self._ready_queue:
+            key = self._ready_queue.popleft()
+
+            if key.is_expired():
+                key.expire()
+                continue
+
+            key.consume()
+            return key
+
+        return None
+
+    # =================================================
+    # INTERNAL RESERVATION (kept for research logic)
     # =================================================
 
     def reserve_key(self, session_id: str) -> Optional[Key]:
@@ -53,11 +76,7 @@ class QBuffer:
             self._reserved[session_id] = key
             return key
 
-        return None  # No available key
-
-    # =================================================
-    # GET RESERVED KEY
-    # =================================================
+        return None
 
     def get_reserved_key(self, session_id: str) -> Optional[Key]:
 
@@ -73,10 +92,6 @@ class QBuffer:
 
         return key
 
-    # =================================================
-    # CONSUME KEY
-    # =================================================
-
     def consume_key(self, session_id: str) -> Optional[Key]:
 
         key = self._reserved.get(session_id)
@@ -87,10 +102,6 @@ class QBuffer:
         key.consume()
         del self._reserved[session_id]
         return key
-
-    # =================================================
-    # RELEASE KEY (IF SESSION CLOSED WITHOUT USE)
-    # =================================================
 
     def release_key(self, session_id: str):
 
@@ -112,7 +123,6 @@ class QBuffer:
 
     def _cleanup_expired_keys(self):
 
-        # Clean ready queue
         cleaned_queue = deque()
 
         while self._ready_queue:
@@ -124,7 +134,6 @@ class QBuffer:
 
         self._ready_queue = cleaned_queue
 
-        # Clean reserved
         expired_sessions = []
 
         for session_id, key in self._reserved.items():
@@ -136,7 +145,7 @@ class QBuffer:
             del self._reserved[session_id]
 
     # =================================================
-    # DEBUG / OBSERVABILITY (FOR DEMO)
+    # DEBUG / DEMO
     # =================================================
 
     def stats(self):
