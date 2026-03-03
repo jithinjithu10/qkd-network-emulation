@@ -1,127 +1,144 @@
 """
 buffers.py
 
-Hybrid ETSI-aligned key buffer management.
+ETSI-aligned, thread-safe key buffer.
 
-Internal lifecycle:
-READY → RESERVED → CONSUMED
+Lifecycle:
+READY → RESERVED → CONSUMED → EXPIRED
 
-Externally supports:
-- Atomic ETSI get_key()
+Supports:
+- Atomic ETSI v2 get_key()
+- Internal reservation (research mode)
+- Inter-KMS concurrent safety
 """
 
 from collections import deque
 from typing import Optional
+from threading import Lock
 from models import Key, KeyState
 
 
 class QBuffer:
     """
-    Manages key lifecycle inside KMS.
+    Thread-safe key lifecycle manager.
     """
 
     def __init__(self):
         self._ready_queue = deque()
         self._reserved = {}
+        self._lock = Lock()  # Critical for concurrency
 
     # =================================================
-    # ADD NEW KEY (INTERNAL USE ONLY)
+    # ADD NEW KEY
     # =================================================
 
     def add_key(self, key: Key):
-        if key.state != KeyState.READY:
-            raise ValueError("Only READY keys can be added to buffer")
-        self._ready_queue.append(key)
+        with self._lock:
+            if key.state != KeyState.READY:
+                raise ValueError("Only READY keys can be added")
+            self._ready_queue.append(key)
 
     # =================================================
-    # ETSI ATOMIC FETCH (v2 compliant)
+    # ETSI v2 ATOMIC FETCH
     # =================================================
 
     def get_next_key(self) -> Optional[Key]:
         """
-        ETSI-compliant atomic key retrieval.
-        Removes key from READY and marks CONSUMED immediately.
+        Atomic key retrieval.
+        Immediately transitions READY → CONSUMED.
         """
 
-        self._cleanup_expired_keys()
+        with self._lock:
 
-        while self._ready_queue:
-            key = self._ready_queue.popleft()
+            self._cleanup_expired_keys_locked()
 
-            if key.is_expired():
-                key.expire()
-                continue
+            while self._ready_queue:
 
-            key.consume()
-            return key
+                key = self._ready_queue.popleft()
 
-        return None
+                if key.is_expired():
+                    key.expire()
+                    continue
+
+                key.consume()
+                return key
+
+            return None
 
     # =================================================
-    # INTERNAL RESERVATION (kept for research logic)
+    # INTERNAL RESERVATION (OPTIONAL)
     # =================================================
 
     def reserve_key(self, session_id: str) -> Optional[Key]:
 
-        self._cleanup_expired_keys()
+        with self._lock:
 
-        while self._ready_queue:
-            key = self._ready_queue.popleft()
+            self._cleanup_expired_keys_locked()
 
-            if key.is_expired():
-                key.expire()
-                continue
+            while self._ready_queue:
 
-            key.reserve(session_id)
-            self._reserved[session_id] = key
-            return key
+                key = self._ready_queue.popleft()
 
-        return None
+                if key.is_expired():
+                    key.expire()
+                    continue
+
+                key.reserve(session_id)
+                self._reserved[session_id] = key
+                return key
+
+            return None
 
     def get_reserved_key(self, session_id: str) -> Optional[Key]:
 
-        key = self._reserved.get(session_id)
+        with self._lock:
 
-        if not key:
-            return None
+            key = self._reserved.get(session_id)
 
-        if key.is_expired():
-            key.expire()
-            del self._reserved[session_id]
-            return None
+            if not key:
+                return None
 
-        return key
+            if key.is_expired():
+                key.expire()
+                del self._reserved[session_id]
+                return None
+
+            return key
 
     def consume_key(self, session_id: str) -> Optional[Key]:
 
-        key = self._reserved.get(session_id)
+        with self._lock:
 
-        if not key:
-            return None
+            key = self._reserved.get(session_id)
 
-        key.consume()
-        del self._reserved[session_id]
-        return key
+            if not key:
+                return None
+
+            key.consume()
+            del self._reserved[session_id]
+            return key
 
     def release_key(self, session_id: str):
 
-        key = self._reserved.get(session_id)
+        with self._lock:
 
-        if not key:
-            return
+            key = self._reserved.get(session_id)
 
-        if key.state == KeyState.RESERVED:
-            key.state = KeyState.READY
-            key.session_id = None
-            self._ready_queue.appendleft(key)
+            if not key:
+                return
 
-        del self._reserved[session_id]
+            if key.state == KeyState.RESERVED:
+                key.state = KeyState.READY
+                key.session_id = None
+                self._ready_queue.appendleft(key)
+
+            del self._reserved[session_id]
 
     # =================================================
-    # CLEANUP EXPIRED KEYS
+    # INTERNAL CLEANUP (LOCKED VERSION)
     # =================================================
 
-    def _cleanup_expired_keys(self):
+    def _cleanup_expired_keys_locked(self):
 
         cleaned_queue = deque()
 
@@ -145,11 +162,12 @@ class QBuffer:
             del self._reserved[session_id]
 
     # =================================================
-    # DEBUG / DEMO
+    # OBSERVABILITY
     # =================================================
 
     def stats(self):
-        return {
-            "ready_keys": len(self._ready_queue),
-            "reserved_keys": len(self._reserved)
-        }
+        with self._lock:
+            return {
+                "ready_keys": len(self._ready_queue),
+                "reserved_keys": len(self._reserved)
+            }

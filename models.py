@@ -1,11 +1,14 @@
 """
 models.py
 
-Strict ETSI-aligned core data models.
+ETSI-aligned core data models.
+Scalable for multi-node QKD network.
 
-Hybrid-compatible:
-- Supports ETSI atomic delivery (READY → CONSUMED)
-- Supports reservation lifecycle (READY → RESERVED → CONSUMED)
+Supports:
+- Atomic ETSI key delivery
+- Reservation lifecycle
+- Node-aware key origin
+- Strict state transitions
 """
 
 from enum import Enum
@@ -13,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 
 # =================================================
-# KEY LIFECYCLE STATES (ETSI-ALIGNED)
+# KEY LIFECYCLE STATES
 # =================================================
 
 class KeyState(str, Enum):
@@ -29,7 +32,7 @@ class KeyState(str, Enum):
 
 class Key:
     """
-    Represents a cryptographic key managed by KMS.
+    Represents a cryptographic key managed by a QKD node.
     """
 
     def __init__(
@@ -37,12 +40,14 @@ class Key:
         key_id: str,
         key_value: str,
         key_size: int,
-        ttl_seconds: int
+        ttl_seconds: int,
+        origin_node: str = "LOCAL"
     ):
 
         self.key_id = key_id
         self.key_value = key_value
         self.key_size = key_size
+        self.origin_node = origin_node  # For inter-KMS tracking
 
         self.created_at = datetime.now(timezone.utc)
         self.ttl = timedelta(seconds=ttl_seconds)
@@ -67,10 +72,10 @@ class Key:
         """
 
         if self.state != KeyState.READY:
-            raise ValueError("Invalid state transition: Key not in READY state")
+            raise ValueError("Key not in READY state")
 
         if self.is_expired():
-            self.state = KeyState.EXPIRED
+            self.expire()
             raise ValueError("Cannot reserve expired key")
 
         self.state = KeyState.RESERVED
@@ -79,12 +84,12 @@ class Key:
     def consume(self):
         """
         Supports:
-        READY → CONSUMED  (ETSI atomic mode)
-        RESERVED → CONSUMED (Session mode)
+        READY → CONSUMED (ETSI atomic)
+        RESERVED → CONSUMED (session mode)
         """
 
-        if self.state not in [KeyState.READY, KeyState.RESERVED]:
-            raise ValueError("Invalid state transition to CONSUMED")
+        if self.state not in (KeyState.READY, KeyState.RESERVED):
+            raise ValueError("Invalid transition to CONSUMED")
 
         self.state = KeyState.CONSUMED
         self.session_id = None
@@ -100,15 +105,27 @@ class Key:
         self.state = KeyState.EXPIRED
         self.session_id = None
 
+    # -------------------------------------------------
+    # SERIALIZATION (for inter-KMS transfer)
+    # -------------------------------------------------
+
+    def to_dict(self):
+        return {
+            "key_ID": self.key_id,
+            "key": self.key_value,
+            "size": self.key_size,
+            "origin": self.origin_node
+        }
+
 
 # =================================================
-# SESSION MODEL (Internal Use)
+# SESSION MODEL (INTERNAL ONLY)
 # =================================================
 
 class Session:
     """
-    Represents ETSI session between application and KMS.
-    Internal abstraction (not part of ETSI external API).
+    Internal session abstraction.
+    Not part of ETSI external API.
     """
 
     def __init__(self, session_id: str, timeout_seconds: int):
@@ -117,10 +134,6 @@ class Session:
         self.created_at = datetime.now(timezone.utc)
         self.timeout = timedelta(seconds=timeout_seconds)
         self.active = True
-
-    # -------------------------------------------------
-    # SESSION VALIDATION
-    # -------------------------------------------------
 
     def is_expired(self) -> bool:
         return datetime.now(timezone.utc) > (self.created_at + self.timeout)

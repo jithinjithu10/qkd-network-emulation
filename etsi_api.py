@@ -1,21 +1,15 @@
 """
 etsi_api.py
 
-Hybrid ETSI v2 Service Interface
-External interface strictly ETSI-style.
+ETSI v2 Service Interface (Application Plane)
 
 Implements:
 - GET  /etsi/v2/status
-- POST /etsi/v2/keys  (atomic key retrieval)
-
-Internal session logic remains hidden.
+- POST /etsi/v2/keys
 """
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from buffers import QBuffer
-from audit import AuditLogger
-from models import Key
 from config import (
     KEY_SIZE,
     DEFAULT_TTL_SECONDS,
@@ -23,18 +17,10 @@ from config import (
     AUTH_ENABLED,
     AUTH_TOKEN
 )
+from models import Key
 import uuid
 import secrets
 
-
-# =================================================
-# INITIALIZATION
-# =================================================
-
-router = APIRouter()
-
-buffer = QBuffer()
-audit = AuditLogger()
 
 security = HTTPBearer()
 
@@ -43,15 +29,13 @@ security = HTTPBearer()
 # AUTHENTICATION
 # =================================================
 
-def verify_token(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
     if not AUTH_ENABLED:
         return True
 
     if credentials.scheme != "Bearer":
-        raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+        raise HTTPException(status_code=401, detail="Invalid auth scheme")
 
     if credentials.credentials != AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
@@ -60,10 +44,16 @@ def verify_token(
 
 
 # =================================================
-# PRELOAD KEY POOL
+# ROUTER FACTORY (IMPORTANT)
 # =================================================
 
-def _preload_keys():
+def create_etsi_router(buffer, audit):
+
+    router = APIRouter()
+
+    # -------------------------------------------------
+    # PRELOAD KEYS (Only Once Per Node)
+    # -------------------------------------------------
 
     for _ in range(INITIAL_KEY_POOL_SIZE):
         key_id = str(uuid.uuid4())
@@ -72,41 +62,38 @@ def _preload_keys():
         buffer.add_key(key)
         audit.key_added(key_id)
 
+    # -------------------------------------------------
+    # STATUS
+    # -------------------------------------------------
 
-_preload_keys()
+    @router.get("/etsi/v2/status")
+    def status(auth: bool = Depends(verify_token)):
 
+        return {
+            "service": "ETSI-KMS",
+            "version": "v2",
+            "status": "RUNNING",
+            "available_keys": buffer.stats()["ready_keys"]
+        }
 
-# =================================================
-# STATUS
-# =================================================
+    # -------------------------------------------------
+    # ATOMIC KEY DELIVERY
+    # -------------------------------------------------
 
-@router.get("/etsi/v2/status")
-def status(auth: bool = Depends(verify_token)):
+    @router.post("/etsi/v2/keys")
+    def get_key(auth: bool = Depends(verify_token)):
 
-    return {
-        "service": "ETSI-KMS",
-        "version": "v2",
-        "status": "RUNNING",
-        "available_keys": buffer.stats()["ready_keys"]
-    }
+        key = buffer.get_next_key()
 
+        if not key:
+            raise HTTPException(status_code=404, detail="No keys available")
 
-# =================================================
-# ETSI v2 ATOMIC KEY DELIVERY
-# =================================================
+        audit.key_consumed(key.key_id)
 
-@router.post("/etsi/v2/keys")
-def get_key(auth: bool = Depends(verify_token)):
+        return {
+            "key_ID": key.key_id,
+            "key": key.key_value,
+            "size": key.key_size
+        }
 
-    key = buffer.get_next_key()
-
-    if not key:
-        raise HTTPException(status_code=404, detail="No keys available")
-
-    audit.key_consumed(key.key_id)
-
-    return {
-        "key_ID": key.key_id,
-        "key": key.key_value,
-        "size": key.key_size
-    }
+    return router

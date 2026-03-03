@@ -1,28 +1,31 @@
 """
 session_manager.py
 
-Strict ETSI-aligned session management.
+Thread-safe ETSI-aligned session management.
 
 Implements:
 - Session creation
 - Session validation
 - Session timeout enforcement
-- Session closure
+- Automatic cleanup
+- Concurrency safety
 """
 
 import uuid
 from typing import Dict
+from threading import Lock
 from models import Session
 
 
 class SessionManager:
     """
-    Manages ETSI sessions between client and KMS.
+    Thread-safe session lifecycle manager.
     """
 
     def __init__(self, timeout_seconds: int):
         self._sessions: Dict[str, Session] = {}
         self._timeout = timeout_seconds
+        self._lock = Lock()
 
     # =================================================
     # CREATE SESSION
@@ -30,11 +33,13 @@ class SessionManager:
 
     def create_session(self) -> str:
 
-        session_id = str(uuid.uuid4())
-        session = Session(session_id, self._timeout)
-        self._sessions[session_id] = session
+        with self._lock:
 
-        return session_id
+            session_id = str(uuid.uuid4())
+            session = Session(session_id, self._timeout)
+            self._sessions[session_id] = session
+
+            return session_id
 
     # =================================================
     # VALIDATE SESSION
@@ -42,14 +47,16 @@ class SessionManager:
 
     def validate_session(self, session_id: str) -> Session:
 
-        session = self._sessions.get(session_id)
+        with self._lock:
 
-        if not session:
-            raise ValueError("Session does not exist")
+            session = self._sessions.get(session_id)
 
-        session.validate()  # Will raise if invalid or expired
+            if not session:
+                raise ValueError("Session does not exist")
 
-        return session
+            session.validate()
+
+            return session
 
     # =================================================
     # CLOSE SESSION
@@ -57,12 +64,14 @@ class SessionManager:
 
     def close_session(self, session_id: str):
 
-        session = self._sessions.get(session_id)
+        with self._lock:
 
-        if not session:
-            raise ValueError("Session does not exist")
+            session = self._sessions.get(session_id)
 
-        session.close()
+            if not session:
+                raise ValueError("Session does not exist")
+
+            session.close()
 
     # =================================================
     # CLEANUP EXPIRED SESSIONS
@@ -70,31 +79,56 @@ class SessionManager:
 
     def cleanup_expired_sessions(self):
 
-        expired_ids = []
+        with self._lock:
 
-        for session_id, session in self._sessions.items():
-            if session.is_expired():
-                expired_ids.append(session_id)
+            expired_ids = []
 
-        for session_id in expired_ids:
-            self._sessions[session_id].close()
+            for session_id, session in self._sessions.items():
+                if session.is_expired():
+                    expired_ids.append(session_id)
+
+            for session_id in expired_ids:
+                self._sessions[session_id].close()
 
     # =================================================
-    # DEBUG / OBSERVABILITY
+    # HARD CLEAN (OPTIONAL – MEMORY SAFE)
+    # =================================================
+
+    def purge_inactive_sessions(self):
+        """
+        Permanently remove inactive sessions.
+        Useful for long-running production nodes.
+        """
+
+        with self._lock:
+
+            inactive = [
+                sid for sid, session in self._sessions.items()
+                if not session.active
+            ]
+
+            for sid in inactive:
+                del self._sessions[sid]
+
+    # =================================================
+    # OBSERVABILITY
     # =================================================
 
     def stats(self):
-        active = 0
-        expired = 0
 
-        for session in self._sessions.values():
-            if session.active:
-                active += 1
-            else:
-                expired += 1
+        with self._lock:
 
-        return {
-            "total_sessions": len(self._sessions),
-            "active_sessions": active,
-            "inactive_sessions": expired
-        }
+            active = 0
+            inactive = 0
+
+            for session in self._sessions.values():
+                if session.active:
+                    active += 1
+                else:
+                    inactive += 1
+
+            return {
+                "total_sessions": len(self._sessions),
+                "active_sessions": active,
+                "inactive_sessions": inactive
+            }
