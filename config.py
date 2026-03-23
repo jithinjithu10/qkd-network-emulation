@@ -1,31 +1,38 @@
 """
-config.py
+config.py (UPDATED - RESEARCH LEVEL)
 
-FINAL CONFIG (IITR ↔ IITJ READY)
+Fixes:
+- Removed session confusion
+- Added data-per-key config
+- Clean SYNC vs ETSI separation
+- Safer defaults
 """
 
 # =================================================
 # NODE CONFIGURATION
 # =================================================
 
-NODE_ID = "IITR"        # Change to IITJ on client
-NODE_ROLE = "SERVER"   # SERVER (IITR) / CLIENT (IITJ)
+NODE_ID = "IITR"        # IITR / IITJ
+NODE_ROLE = "SERVER"   # SERVER / CLIENT
 
 # =================================================
-# SYSTEM MODE (VERY IMPORTANT)
+# SYSTEM MODE
 # =================================================
 
-# "SYNC"  → deterministic demo mode
-# "ETSI"  → real API + inter-KMS mode
+# "SYNC"  → demo mode
+# "ETSI"  → real system (USE THIS)
 
-SYSTEM_MODE = "SYNC"
+SYSTEM_MODE = "ETSI"
 
 # =================================================
-# SYNC CONFIGURATION (QKD EMULATION)
+# SYNC CONFIGURATION
 # =================================================
 
 SYNC_SEED = "QKD_SHARED_SEED_2026"
-SYNC_KEY_INDEX = 0
+
+# NOTE:
+# Sync index is NOT stored here anymore
+# It is managed inside buffer (correct design)
 
 # =================================================
 # SERVER CONFIGURATION
@@ -43,20 +50,15 @@ DEFAULT_TTL_SECONDS = 300
 INITIAL_KEY_POOL_SIZE = 20
 MAX_BUFFER_SIZE = 1000
 
-# =================================================
-# SESSION CONFIGURATION
-# =================================================
-
-SESSION_TIMEOUT_SECONDS = 600
+# NEW → DATA PER KEY (CRITICAL)
+MAX_BYTES_PER_KEY = 32
 
 # =================================================
 # AUTHENTICATION CONFIGURATION
 # =================================================
 
 AUTH_ENABLED = True
-
 AUTH_TOKEN = "ETSI_DEMO_SECURE_TOKEN_2026"
-
 NODE_SHARED_SECRET = "INTERKMS_SHARED_SECRET_2026"
 
 # =================================================
@@ -68,28 +70,25 @@ INTERKMS_MAX_RETRIES = 3
 INTERKMS_SYNC_INTERVAL = 10
 
 # =================================================
-# PEER NODES ( VERY IMPORTANT)
+# PEER NODES
 # =================================================
 
-# IITR (SERVER) → no peers needed
-# IITJ (CLIENT) → must connect to IITR
+# IMPORTANT:
+# Replace with actual IITR server URL when running client
 
 PEER_NODES = {
-    "IITR": "http://<IITR_IP>:8001"
+    "IITR": "http://10.13.2.132:8001"
 }
-
-# Example:
-# "http://10.13.2.132:8001"
 
 # =================================================
 # CRYPTOGRAPHY CONFIGURATION
 # =================================================
 
-ENCRYPTION_ALGORITHM = "AES-256"
+ENCRYPTION_ALGORITHM = "AES-256-GCM"
 AES_BLOCK_SIZE = 16
 
 # =================================================
-# APPLICATION DEMO CONFIGURATION
+# APPLICATION DEMO
 # =================================================
 
 DEMO_MESSAGE = "Hello from QKD Secure Channel"
@@ -101,7 +100,7 @@ DEMO_MESSAGE = "Hello from QKD Secure Channel"
 ENABLE_DEBUG_LOGS = True
 
 # =================================================
-# STRESS TEST CONFIGURATION
+# STRESS TEST
 # =================================================
 
 ENABLE_STRESS_TEST = False

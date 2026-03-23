@@ -1,14 +1,11 @@
 """
-kms_server.py
+kms_server.py (UPDATED - RESEARCH LEVEL)
 
-Enhanced ETSI-aligned QKD Node
-
-Now supports:
-- ETSI mode (random key generation)
-- SYNC mode (deterministic key generation)
-- Inter-KMS communication
-- Full audit logging
-- Lifespan-based startup/shutdown (UPDATED)
+Fixes:
+- Removed "sync-" prefix
+- Removed SYNC_KEY_INDEX dependency
+- Clean sync-safe key generation
+- Consistent key_id handling
 """
 
 from fastapi import FastAPI
@@ -26,8 +23,7 @@ from config import (
     DEFAULT_TTL_SECONDS,
     INITIAL_KEY_POOL_SIZE,
     SYSTEM_MODE,
-    SYNC_SEED,
-    SYNC_KEY_INDEX
+    SYNC_SEED
 )
 
 from buffers import QBuffer
@@ -40,7 +36,7 @@ from interkms_client import InterKMSClient
 
 
 # =================================================
-# SHARED COMPONENTS
+# SHARED
 # =================================================
 
 buffer = QBuffer()
@@ -50,14 +46,10 @@ interkms_client = InterKMSClient(buffer, audit)
 
 
 # =================================================
-# KEY GENERATION LOGIC
+# SYNC KEY GENERATOR
 # =================================================
 
 def generate_sync_key(index: int):
-    """
-    Deterministic key generation (QKD emulation)
-    Same key on both nodes
-    """
     data = f"{SYNC_SEED}-{index}".encode()
     return hashlib.sha256(data).hexdigest()
 
@@ -73,18 +65,16 @@ def preload_keys():
     for i in range(INITIAL_KEY_POOL_SIZE):
 
         # -----------------------------
-        # SYNC MODE → SAME KEY_ID + VALUE
+        # SYNC MODE
         # -----------------------------
         if SYSTEM_MODE == "SYNC":
 
-            index = SYNC_KEY_INDEX + i
-
-            key_id = f"sync-{index}"   #  FIXED
-            key_value = generate_sync_key(index)
+            key_id = str(i)   # FIXED (numeric only)
+            key_value = generate_sync_key(i)
             origin = "SYNC"
 
         # -----------------------------
-        # ETSI MODE → RANDOM
+        # ETSI MODE
         # -----------------------------
         else:
 
@@ -100,48 +90,39 @@ def preload_keys():
             origin_node=origin
         )
 
-        # -----------------------------
-        # ADD TO BUFFER
-        # -----------------------------
+        # add to buffer
         if origin == "SYNC":
             buffer.add_sync_key(key)
         else:
             buffer.add_key(key)
 
-        # -----------------------------
-        # DEBUG LOG
-        # -----------------------------
         print(f"[KEY GENERATED] id={key_id} value={key_value[:12]}...")
 
-    print(f"[INFO] {INITIAL_KEY_POOL_SIZE} keys preloaded successfully")
+    print(f"[INFO] {INITIAL_KEY_POOL_SIZE} keys preloaded")
 
 
 # =================================================
-# LIFESPAN HANDLER (REPLACES on_event)
+# LIFESPAN
 # =================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    print("[SYSTEM] Starting QKD KMS Node...")
+    print("[SYSTEM] Starting QKD Node...")
 
     audit.system_start()
 
-    # Step 1 → preload keys
     preload_keys()
 
-    # Step 2 → Inter-KMS client (ONLY CLIENT NODE)
+    # start inter-KMS if client
     if NODE_ROLE == "CLIENT":
         interkms_client.start()
-        print("[INFO] Inter-KMS client activated")
+        print("[INFO] Inter-KMS client started")
 
-    print("[SYSTEM] Node is ready ")
+    print("[SYSTEM] Node ready")
 
-    yield  #  APP RUNS HERE
+    yield
 
-    # -----------------------------
-    # SHUTDOWN LOGIC
-    # -----------------------------
     print("[SYSTEM] Shutting down...")
 
     interkms_client.stop()
@@ -149,14 +130,14 @@ async def lifespan(app: FastAPI):
 
 
 # =================================================
-# FASTAPI APP
+# APP
 # =================================================
 
 app = FastAPI(
     title="ETSI-Aligned QKD Node",
-    version="3.1",
-    description="ETSI-compliant QKD Key Management Node",
-    lifespan=lifespan   #  IMPORTANT
+    version="4.0",
+    description="QKD Key Management Node",
+    lifespan=lifespan
 )
 
 app.include_router(create_etsi_router(buffer, audit))

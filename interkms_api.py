@@ -1,13 +1,11 @@
 """
-interkms_api.py
+interkms_api.py (UPDATED - RESEARCH LEVEL)
 
-FINAL VERSION (SYNC + SESSION AWARE)
-
-Supports:
-- Key request
-- Optional key_id request
-- Sync validation
-- Full audit trace
+Fixes:
+- No direct buffer access
+- Proper key_id handling
+- Sync validation added
+- Clean lifecycle handling
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -19,7 +17,7 @@ security = HTTPBearer()
 
 
 # =================================================
-# AUTHENTICATION
+# AUTH
 # =================================================
 
 def verify_node_token(
@@ -39,7 +37,7 @@ def verify_node_token(
 
 
 # =================================================
-# ROUTER FACTORY
+# ROUTER
 # =================================================
 
 def create_interkms_router(buffer, audit):
@@ -47,7 +45,7 @@ def create_interkms_router(buffer, audit):
     router = APIRouter()
 
     # -------------------------------------------------
-    # REQUEST KEY FROM NODE
+    # REQUEST KEY
     # -------------------------------------------------
 
     @router.post("/interkms/v1/request-key")
@@ -56,53 +54,55 @@ def create_interkms_router(buffer, audit):
         auth: bool = Depends(verify_node_token)
     ):
 
-        requester = request.headers.get("X-Node-ID", "UNKNOWN_NODE")
+        requester = request.headers.get("X-Node-ID", "UNKNOWN")
 
-        audit.api_call("/interkms/v1/request-key", plane="INTER-KMS")
+        audit.api_call("/interkms/v1/request-key", "INTER-KMS")
         audit.interkms_request(requester)
 
-        body = {}
         try:
             body = await request.json()
         except:
-            pass
+            body = {}
 
         requested_key_id = body.get("key_id")
 
         # =================================================
-        # CASE 1 → REQUEST SPECIFIC KEY (SYNC MODE)
+        # CASE 1 → SPECIFIC KEY REQUEST
         # =================================================
 
         if requested_key_id:
 
-            for key in list(buffer._ready_queue):
+            key = buffer.get_key_by_id(requested_key_id)
 
-                if key.key_id == requested_key_id:
+            if not key:
+                audit.error(
+                    f"Key not found: {requested_key_id}",
+                    "INTER-KMS"
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail="Key not found"
+                )
 
-                    buffer._ready_queue.remove(key)
+            # SYNC VALIDATION (VERY IMPORTANT)
+            if SYSTEM_MODE == "SYNC":
+                expected_index = buffer._sync_index
 
-                    key.consume()
+                if str(expected_index) != str(requested_key_id):
+                    audit.sync_mismatch(
+                        expected=expected_index,
+                        received=requested_key_id
+                    )
 
-                    audit.key_shared_with_node(key.key_id, requester)
-                    audit.interkms_response(key.key_id, requester)
+            audit.key_shared_with_node(key.key_id, requester)
+            audit.interkms_response(key.key_id, requester)
 
-                    return {
-                        "key_ID": key.key_id,
-                        "key": key.key_value,
-                        "origin": NODE_ID,
-                        "mode": SYSTEM_MODE,
-                        "served_to": requester
-                    }
-
-            audit.error(
-                f"Requested key not found: {requested_key_id}",
-                plane="INTER-KMS"
-            )
-
-            raise HTTPException(
-                status_code=404,
-                detail="Requested key not found"
-            )
+            return {
+                "key_id": key.key_id,
+                "key": key.key_value,
+                "origin": NODE_ID,
+                "mode": SYSTEM_MODE
+            }
 
         # =================================================
         # CASE 2 → NORMAL REQUEST
@@ -111,23 +111,20 @@ def create_interkms_router(buffer, audit):
         key = buffer.get_next_key()
 
         if not key:
-
             audit.error(
-                f"Inter-KMS request failed: buffer empty | requester={requester}",
-                plane="INTER-KMS"
+                f"No keys available for {requester}",
+                "INTER-KMS"
             )
-
             raise HTTPException(status_code=404, detail="No keys available")
 
         audit.key_shared_with_node(key.key_id, requester)
         audit.interkms_response(key.key_id, requester)
 
         return {
-            "key_ID": key.key_id,
+            "key_id": key.key_id,
             "key": key.key_value,
             "origin": NODE_ID,
-            "mode": SYSTEM_MODE,
-            "served_to": requester
+            "mode": SYSTEM_MODE
         }
 
     return router

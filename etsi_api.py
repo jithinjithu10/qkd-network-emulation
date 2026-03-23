@@ -1,12 +1,10 @@
 """
-etsi_api.py
+etsi_api.py (UPDATED - RESEARCH LEVEL)
 
-FINAL VERSION (SESSION-AWARE ETSI API)
-
-Supports:
-- Key fetch
-- Session-based reservation
-- Reserved key retrieval
+Fixes:
+- Removed session abstraction
+- Pure key_id-based access
+- ETSI-aligned endpoints
 """
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -18,7 +16,7 @@ security = HTTPBearer()
 
 
 # =================================================
-# AUTHENTICATION
+# AUTH
 # =================================================
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -36,7 +34,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 
 # =================================================
-# ROUTER FACTORY
+# ROUTER
 # =================================================
 
 def create_etsi_router(buffer, audit):
@@ -50,109 +48,59 @@ def create_etsi_router(buffer, audit):
     @router.get("/etsi/v2/status")
     def status(auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/status", plane="APPLICATION")
+        audit.api_call("/etsi/v2/status", "APPLICATION")
 
         stats = buffer.stats()
 
         return {
             "service": "ETSI-KMS",
-            "version": "v2",
             "status": "RUNNING",
-            "system_mode": SYSTEM_MODE,
+            "mode": SYSTEM_MODE,
             "available_keys": stats["ready_keys"],
-            "reserved_keys": stats.get("reserved_keys", 0),
             "sync_index": stats.get("sync_index", 0)
         }
 
     # -------------------------------------------------
-    # KEY FETCH (DIRECT)
+    # GET NEW KEY
     # -------------------------------------------------
 
     @router.post("/etsi/v2/keys")
     def get_key(auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/keys", plane="APPLICATION")
+        audit.api_call("/etsi/v2/keys", "APPLICATION")
 
         key = buffer.get_next_key()
 
         if not key:
-            audit.error("Key request failed: buffer empty", "APPLICATION")
+            audit.error("No keys available", "APPLICATION")
             raise HTTPException(status_code=404, detail="No keys available")
 
         audit.key_served(key.key_id)
 
         return {
-            "key_ID": key.key_id,
+            "key_id": key.key_id,
             "key": key.key_value,
             "size": key.key_size,
-            "origin": key.origin_node,
-            "mode": SYSTEM_MODE
-        }
-
-    # -------------------------------------------------
-    # SESSION-BASED RESERVATION (NEW)
-    # -------------------------------------------------
-
-    @router.post("/etsi/v2/reserve")
-    def reserve_key(session_id: str, auth: bool = Depends(verify_token)):
-
-        audit.api_call("/etsi/v2/reserve", plane="APPLICATION")
-
-        key = buffer.reserve_key(session_id)
-
-        if not key:
-            audit.error("Reservation failed: no key", "APPLICATION")
-            raise HTTPException(status_code=404, detail="No keys available")
-
-        #  log session mapping
-        audit.session_key_mapping(session_id, key.key_id)
-
-        return {
-            "session_id": session_id,
-            "key_ID": key.key_id,
             "origin": key.origin_node
         }
 
     # -------------------------------------------------
-    #  GET RESERVED KEY (NEW)
+    # GET KEY BY ID (VERY IMPORTANT)
     # -------------------------------------------------
 
-    @router.get("/etsi/v2/reserved/{session_id}")
-    def get_reserved(session_id: str, auth: bool = Depends(verify_token)):
+    @router.get("/etsi/v2/keys/{key_id}")
+    def get_key_by_id(key_id: str, auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/reserved", plane="APPLICATION")
+        audit.api_call("/etsi/v2/keys/{id}", "APPLICATION")
 
-        key = buffer.get_reserved_key(session_id)
+        key = buffer.get_key_by_id(key_id)
 
         if not key:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise HTTPException(status_code=404, detail="Key not found")
 
         return {
-            "session_id": session_id,
-            "key_ID": key.key_id,
+            "key_id": key.key_id,
             "key": key.key_value
-        }
-
-    # -------------------------------------------------
-    #  CONSUME RESERVED KEY (NEW)
-    # -------------------------------------------------
-
-    @router.post("/etsi/v2/consume/{session_id}")
-    def consume_reserved(session_id: str, auth: bool = Depends(verify_token)):
-
-        audit.api_call("/etsi/v2/consume", plane="APPLICATION")
-
-        key = buffer.consume_key(session_id)
-
-        if not key:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        audit.key_consumed(key.key_id)
-
-        return {
-            "session_id": session_id,
-            "key_ID": key.key_id,
-            "status": "CONSUMED"
         }
 
     return router

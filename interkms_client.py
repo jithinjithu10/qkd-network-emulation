@@ -1,13 +1,11 @@
 """
-interkms_client.py
+interkms_client.py (UPDATED - RESEARCH LEVEL)
 
-FINAL VERSION (SYNC-CORRECT)
-
-Supports:
-- Targeted key_id requests
-- Deterministic synchronization
-- Retry mechanism
-- Strong audit logging
+Fixes:
+- Removed "sync-" prefix
+- Strong sync validation
+- Correct API field names
+- Improved retry + logging
 """
 
 import threading
@@ -23,8 +21,7 @@ from config import (
     DEFAULT_TTL_SECONDS,
     NODE_SHARED_SECRET,
     INTERKMS_SYNC_INTERVAL,
-    INTERKMS_MAX_RETRIES,
-    SYSTEM_MODE
+    INTERKMS_MAX_RETRIES
 )
 
 
@@ -39,16 +36,12 @@ class InterKMSClient:
         self.thread = None
 
     # =================================================
-    # START CLIENT
+    # START
     # =================================================
 
     def start(self):
 
         if NODE_ROLE != "CLIENT":
-            return
-
-        if SYSTEM_MODE == "SYNC":
-            print("[INFO] Sync mode → Inter-KMS disabled")
             return
 
         if self.running:
@@ -66,7 +59,7 @@ class InterKMSClient:
         print(f"[INFO] Inter-KMS client started on {NODE_ID}")
 
     # =================================================
-    # STOP CLIENT
+    # STOP
     # =================================================
 
     def stop(self):
@@ -77,7 +70,7 @@ class InterKMSClient:
             self.thread.join(timeout=2)
 
     # =================================================
-    # MAIN LOOP
+    # LOOP
     # =================================================
 
     def _pull_loop(self):
@@ -86,10 +79,11 @@ class InterKMSClient:
 
             for peer_name, peer_url in PEER_NODES.items():
 
-                #  Determine expected key_id
                 stats = self.buffer.stats()
                 expected_index = stats.get("sync_index", 0)
-                expected_key_id = f"sync-{expected_index}"
+
+                # FIX: numeric key_id only
+                expected_key_id = str(expected_index)
 
                 success = False
 
@@ -109,7 +103,7 @@ class InterKMSClient:
                                 "X-Node-ID": NODE_ID
                             },
                             json={
-                                "key_id": expected_key_id   #  IMPORTANT
+                                "key_id": expected_key_id
                             },
                             timeout=5
                         )
@@ -119,23 +113,27 @@ class InterKMSClient:
 
                         data = response.json()
 
-                        #  Validate sync
-                        if data["key_ID"] != expected_key_id:
-                            self.audit.error(
-                                f"[SYNC ERROR] Expected {expected_key_id}, got {data['key_ID']}",
-                                plane="INTER-KMS"
+                        # FIX: correct field name
+                        received_key_id = data["key_id"]
+
+                        # STRONG SYNC VALIDATION
+                        if str(received_key_id) != expected_key_id:
+
+                            self.audit.sync_mismatch(
+                                expected=expected_key_id,
+                                received=received_key_id
                             )
                             continue
 
                         key = Key(
-                            key_id=data["key_ID"],
+                            key_id=received_key_id,
                             key_value=data["key"],
                             key_size=data.get("size", 256),
                             ttl_seconds=DEFAULT_TTL_SECONDS,
                             origin_node=data.get("origin", peer_name)
                         )
 
-                        # Insert into buffer
+                        # insert into buffer
                         self.buffer.add_remote_key(
                             key,
                             remote_node=peer_name
@@ -153,7 +151,7 @@ class InterKMSClient:
                     except Exception as e:
 
                         self.audit.error(
-                            f"Pull attempt {attempt+1} failed from {peer_name}: {str(e)}",
+                            f"Attempt {attempt+1} failed from {peer_name}: {str(e)}",
                             plane="INTER-KMS"
                         )
 

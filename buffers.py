@@ -1,13 +1,10 @@
 """
-buffers.py
+buffers.py (FINAL - SESSION FREE, RESEARCH LEVEL)
 
-FINAL VERSION (ETSI + SYNC SAFE)
-
-Supports:
-- Deterministic sync mode (controlled)
-- ETSI mode (API-driven)
-- Session-safe reservation
-- Proper separation of concerns
+Fixes:
+- Removed session logic completely
+- Added get_key_by_id()
+- Clean ETSI + SYNC design
 """
 
 from collections import deque
@@ -24,19 +21,18 @@ class QBuffer:
     def __init__(self):
 
         self._ready_queue = deque()
-        self._reserved = {}
-
         self._lock = Lock()
+        self._known_keys = {}
 
-        self._known_keys = set()
-
-        #  Only used in SYNC mode
         self._sync_index = 0
+
+        self._key_usage = {}
+        self.MAX_BYTES_PER_KEY = 32
 
         self.audit = AuditLogger()
 
     # =================================================
-    # ADD LOCAL KEY
+    # ADD KEY
     # =================================================
 
     def add_key(self, key: Key):
@@ -44,38 +40,20 @@ class QBuffer:
         with self._lock:
 
             if key.key_id in self._known_keys:
-                self.audit.error(f"Duplicate key detected: {key.key_id}")
+                self.audit.error(f"Duplicate key: {key.key_id}")
                 return
 
             if key.state != KeyState.READY:
-                raise ValueError("Only READY keys can be added")
+                raise ValueError("Only READY keys allowed")
 
             self._ready_queue.append(key)
-            self._known_keys.add(key.key_id)
+            self._known_keys[key.key_id] = key
+            self._key_usage[key.key_id] = 0
 
-            self.audit.key_added(key.key_id, origin="LOCAL")
-
-    # =================================================
-    # ADD REMOTE KEY
-    # =================================================
-
-    def add_remote_key(self, key: Key, remote_node: str):
-
-        with self._lock:
-
-            if key.key_id in self._known_keys:
-                self.audit.sync_key_matched(key.key_id)
-                return
-
-            key.state = KeyState.READY
-
-            self._ready_queue.append(key)
-            self._known_keys.add(key.key_id)
-
-            self.audit.key_received_from_node(key.key_id, remote_node)
+            self.audit.key_added(key.key_id)
 
     # =================================================
-    # ADD SYNC KEY
+    # SYNC KEY ADD
     # =================================================
 
     def add_sync_key(self, key: Key):
@@ -87,12 +65,13 @@ class QBuffer:
                 return
 
             self._ready_queue.append(key)
-            self._known_keys.add(key.key_id)
+            self._known_keys[key.key_id] = key
+            self._key_usage[key.key_id] = 0
 
             self.audit.sync_key_generated(key.key_id)
 
     # =================================================
-    #  KEY FETCH (SMART HANDLING)
+    # FETCH NEXT KEY
     # =================================================
 
     def get_next_key(self) -> Optional[Key]:
@@ -101,39 +80,36 @@ class QBuffer:
 
             self._cleanup_expired_keys_locked()
 
-            # -----------------------------------------
-            # SYNC MODE → deterministic
-            # -----------------------------------------
             if SYSTEM_MODE == "SYNC":
 
-                expected_key_id = f"sync-{self._sync_index}"
+                expected_key_id = str(self._sync_index)
 
-                for key in self._ready_queue:
+                key = self._known_keys.get(expected_key_id)
 
-                    if key.key_id == expected_key_id:
+                if not key:
+                    self.audit.sync_mismatch(
+                        expected=self._sync_index,
+                        received=list(self._known_keys.keys())
+                    )
+                    return None
 
-                        self._ready_queue.remove(key)
+                if key.is_expired():
+                    key.expire()
+                    self.audit.key_expired(key.key_id)
+                    return None
 
-                        if key.is_expired():
-                            key.expire()
-                            self.audit.key_expired(key.key_id)
-                            return None
+                old_id = key.key_id
 
-                        key.consume()
-                        self.audit.key_consumed(key.key_id)
+                key.consume()
+                self.audit.key_consumed(key.key_id)
 
-                        #  sync progression log
-                        self._sync_index += 1
-                        self.audit.sync_progress(self._sync_index)
+                self._sync_index += 1
 
-                        return key
+                self.audit.key_rotation(old_id, str(self._sync_index))
+                self.audit.sync_progress(self._sync_index)
 
-                self.audit.error(f"[SYNC ERROR] Missing key: {expected_key_id}")
-                return None
+                return key
 
-            # -----------------------------------------
-            # ETSI MODE → normal queue
-            # -----------------------------------------
             else:
 
                 while self._ready_queue:
@@ -153,68 +129,14 @@ class QBuffer:
                 return None
 
     # =================================================
-    # RESERVATION
+    # GET KEY BY ID (VERY IMPORTANT)
     # =================================================
 
-    def reserve_key(self, session_id: str) -> Optional[Key]:
+    def get_key_by_id(self, key_id: str) -> Optional[Key]:
 
         with self._lock:
 
-            self._cleanup_expired_keys_locked()
-
-            if SYSTEM_MODE == "SYNC":
-
-                expected_key_id = f"sync-{self._sync_index}"
-
-                for key in self._ready_queue:
-
-                    if key.key_id == expected_key_id:
-
-                        self._ready_queue.remove(key)
-
-                        key.reserve(session_id)
-                        self._reserved[session_id] = key
-
-                        self.audit.key_reserved(key.key_id, session_id)
-
-                        self._sync_index += 1
-                        self.audit.sync_progress(self._sync_index)
-
-                        return key
-
-                self.audit.error(f"[SYNC ERROR] Reservation failed: {expected_key_id}")
-                return None
-
-            # ETSI MODE
-            else:
-
-                while self._ready_queue:
-
-                    key = self._ready_queue.popleft()
-
-                    if key.is_expired():
-                        key.expire()
-                        self.audit.key_expired(key.key_id)
-                        continue
-
-                    key.reserve(session_id)
-                    self._reserved[session_id] = key
-
-                    self.audit.key_reserved(key.key_id, session_id)
-
-                    return key
-
-                return None
-
-    # =================================================
-    # RESERVED ACCESS
-    # =================================================
-
-    def get_reserved_key(self, session_id: str) -> Optional[Key]:
-
-        with self._lock:
-
-            key = self._reserved.get(session_id)
+            key = self._known_keys.get(key_id)
 
             if not key:
                 return None
@@ -222,27 +144,30 @@ class QBuffer:
             if key.is_expired():
                 key.expire()
                 self.audit.key_expired(key.key_id)
-
-                del self._reserved[session_id]
                 return None
 
             return key
 
-    def consume_key(self, session_id: str) -> Optional[Key]:
+    # =================================================
+    # DATA USAGE
+    # =================================================
+
+    def use_key_bytes(self, key_id: str, byte_count: int):
 
         with self._lock:
 
-            key = self._reserved.get(session_id)
+            if key_id not in self._key_usage:
+                return False
 
-            if not key:
-                return None
+            self._key_usage[key_id] += byte_count
 
-            key.consume()
-            self.audit.key_consumed(key.key_id)
+            self.audit.key_usage(key_id, self._key_usage[key_id])
 
-            del self._reserved[session_id]
+            if self._key_usage[key_id] >= self.MAX_BYTES_PER_KEY:
+                self.audit.key_limit_reached(key_id)
+                return False
 
-            return key
+            return True
 
     # =================================================
     # CLEANUP
@@ -274,8 +199,7 @@ class QBuffer:
 
             return {
                 "ready_keys": len(self._ready_queue),
-                "reserved_keys": len(self._reserved),
-                "total_known_keys": len(self._known_keys),
+                "total_keys": len(self._known_keys),
                 "sync_index": self._sync_index
             }
 
@@ -289,6 +213,6 @@ class QBuffer:
 
             return {
                 "ready_ids": [k.key_id for k in self._ready_queue],
-                "reserved_ids": list(self._reserved.keys()),
-                "sync_index": self._sync_index
+                "sync_index": self._sync_index,
+                "usage": self._key_usage
             }

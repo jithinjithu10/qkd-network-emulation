@@ -1,9 +1,10 @@
 """
-application_demo.py (UPDATED)
+application_demo.py (UPDATED - FINAL CORRECT)
 
-Demonstrates secure communication using:
-- ETSI KMS (session-based)
-- SYNC mode (aligned with buffer)
+Fixes:
+- Includes AES-GCM tag
+- Matches SecureTransfer API
+- Consistent with research model
 """
 
 from secure_transfer import SecureTransfer
@@ -22,11 +23,10 @@ USE_SYNC_MODE = False   # True → simulate QKD sync
 
 
 # =================================================
-# SYNC KEY GENERATOR (MATCH BUFFER LOGIC)
+# SYNC KEY GENERATOR
 # =================================================
 
 def generate_sync_key(index):
-
     seed = "QKD_SHARED_SEED_2026"
     return hashlib.sha256(f"{seed}-{index}".encode()).hexdigest()
 
@@ -48,7 +48,7 @@ def run_demo():
 
 
     # =================================================
-    # MODE 1 → ETSI KMS (SESSION-BASED)
+    # MODE 1 → ETSI KMS
     # =================================================
     if not USE_SYNC_MODE:
 
@@ -56,8 +56,8 @@ def run_demo():
 
         app = SecureTransfer(KMS_URL, TOKEN)
 
-        #  Now returns session_id instead of raw key
-        session_id, iv, ciphertext = app.send_secure_message(message)
+        #  FIXED: includes tag
+        session_id, iv, ciphertext, tag = app.send_secure_message(message)
 
         print("\nEncrypted Ciphertext:")
         print(ciphertext.hex())
@@ -65,36 +65,44 @@ def run_demo():
         print("\nSession ID (share this):")
         print(session_id)
 
-        #  Receiver uses session_id (not raw key)
+        print("\nTag:")
+        print(tag.hex())
+
+        #  FIXED: pass tag also
         decrypted = app.receive_secure_message(
             session_id,
             iv,
-            ciphertext
+            ciphertext,
+            tag
         )
 
 
     # =================================================
-    # MODE 2 → SYNC MODE (MATCH BUFFER INDEX)
+    # MODE 2 → SYNC MODE
     # =================================================
     else:
 
         print("\n[MODE] Synchronized Key Generation")
 
-        sync_index = 0   #  MUST match buffer start
+        sync_index = 0   # must match sender
 
         key = generate_sync_key(sync_index)
 
         ce = CryptoEngine(key)
 
-        iv, ciphertext = ce.encrypt(message.encode())
+        # FIXED: include tag
+        iv, ciphertext, tag = ce.encrypt(message.encode())
 
         print("\nEncrypted Ciphertext:")
         print(ciphertext.hex())
 
-        # simulate receiver side
+        print("\nTag:")
+        print(tag.hex())
+
+        # simulate receiver
         ce2 = CryptoEngine(key)
 
-        decrypted = ce2.decrypt(iv, ciphertext).decode()
+        decrypted = ce2.decrypt(iv, ciphertext, tag).decode()
 
 
     print("\nDecrypted Message:")
