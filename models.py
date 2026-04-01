@@ -1,12 +1,4 @@
-"""
-models.py (UPDATED - RESEARCH LEVEL)
-
-Fixes:
-- Removed session abstraction
-- Removed sync- logic
-- Simplified key lifecycle
-- Clean ETSI-aligned design
-"""
+# models.py (FINAL - SYNC SAFE + CLEAN)
 
 from enum import Enum
 from datetime import datetime, timezone, timedelta
@@ -39,10 +31,25 @@ class Key:
         origin_node: str = "LOCAL"
     ):
 
+        # -------------------------------
+        # BASIC VALIDATION
+        # -------------------------------
+        if not key_id:
+            raise ValueError("key_id required")
+
+        if not key_value:
+            raise ValueError("key_value required")
+
+        if len(key_value) < 10:
+            raise ValueError("Invalid key_value")
+
+        # enforce numeric key_id (important for sync)
+        if not key_id.isdigit():
+            raise ValueError("key_id must be numeric")
+
         self.key_id = key_id
         self.key_value = key_value
         self.key_size = key_size
-
         self.origin_node = origin_node
 
         self.created_at = datetime.now(timezone.utc)
@@ -53,7 +60,7 @@ class Key:
         self.state = KeyState.READY
         self.used_at = None
 
-        # fingerprint (useful for sync validation)
+        # fingerprint (used for sync validation)
         self.fingerprint = self._compute_fingerprint()
 
     # -------------------------------------------------
@@ -87,14 +94,15 @@ class Key:
         self.used_at = datetime.now(timezone.utc)
 
     def expire(self):
-
         self.state = KeyState.EXPIRED
 
     # -------------------------------------------------
-    # MATCH (SYNC VALIDATION)
+    # SYNC VALIDATION
     # -------------------------------------------------
 
     def matches(self, other_key) -> bool:
+        if not other_key:
+            return False
         return self.fingerprint == other_key.fingerprint
 
     # -------------------------------------------------

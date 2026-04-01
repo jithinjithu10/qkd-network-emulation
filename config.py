@@ -1,28 +1,23 @@
-"""
-config.py (UPDATED - RESEARCH LEVEL)
-
-Fixes:
-- Removed session confusion
-- Added data-per-key config
-- Clean SYNC vs ETSI separation
-- Safer defaults
-"""
+# config.py (FINAL - KMS SYNC READY)
 
 # =================================================
 # NODE CONFIGURATION
 # =================================================
 
-NODE_ID = "IITR"        # IITR / IITJ
+NODE_ID = "IITR"        # "IITR" or "IITJ"
 NODE_ROLE = "SERVER"   # SERVER / CLIENT
 
 # =================================================
 # SYSTEM MODE
 # =================================================
 
-# "SYNC"  → demo mode
-# "ETSI"  → real system (USE THIS)
+# "SYNC"  → local demo (same key generation)
+# "ETSI"  → real KMS system (USE THIS)
 
 SYSTEM_MODE = "ETSI"
+
+# Enable inter-KMS synchronization
+SYNC_ENABLED = True
 
 # =================================================
 # SYNC CONFIGURATION
@@ -31,8 +26,7 @@ SYSTEM_MODE = "ETSI"
 SYNC_SEED = "QKD_SHARED_SEED_2026"
 
 # NOTE:
-# Sync index is NOT stored here anymore
-# It is managed inside buffer (correct design)
+# Sync index is handled in buffer (correct)
 
 # =================================================
 # SERVER CONFIGURATION
@@ -50,7 +44,7 @@ DEFAULT_TTL_SECONDS = 300
 INITIAL_KEY_POOL_SIZE = 20
 MAX_BUFFER_SIZE = 1000
 
-# NEW → DATA PER KEY (CRITICAL)
+# IMPORTANT → must match buffers.py
 MAX_BYTES_PER_KEY = 32
 
 # =================================================
@@ -59,6 +53,8 @@ MAX_BYTES_PER_KEY = 32
 
 AUTH_ENABLED = True
 AUTH_TOKEN = "ETSI_DEMO_SECURE_TOKEN_2026"
+
+# Used for IITR ↔ IITJ communication
 NODE_SHARED_SECRET = "INTERKMS_SHARED_SECRET_2026"
 
 # =================================================
@@ -70,15 +66,22 @@ INTERKMS_MAX_RETRIES = 3
 INTERKMS_SYNC_INTERVAL = 10
 
 # =================================================
-# PEER NODES
+# PEER CONFIGURATION (VERY IMPORTANT)
 # =================================================
 
-# IMPORTANT:
-# Replace with actual IITR server URL when running client
+# Define both nodes properly
 
 PEER_NODES = {
-    "IITR": "http://10.13.2.132:8001"
+    "IITR": "http://10.13.2.132:8000",
+    "IITJ": "http://10.13.2.132:8001"
 }
+
+# Get peer dynamically
+def get_peer_url():
+    if NODE_ID == "IITR":
+        return PEER_NODES["IITJ"]
+    else:
+        return PEER_NODES["IITR"]
 
 # =================================================
 # CRYPTOGRAPHY CONFIGURATION

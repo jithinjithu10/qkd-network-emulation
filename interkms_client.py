@@ -1,16 +1,9 @@
-"""
-interkms_client.py (UPDATED - RESEARCH LEVEL)
-
-Fixes:
-- Removed "sync-" prefix
-- Strong sync validation
-- Correct API field names
-- Improved retry + logging
-"""
+# interkms_client.py (FINAL - SYNC CORRECT + SECURE)
 
 import threading
 import time
 import requests
+import hashlib
 
 from models import Key
 
@@ -23,6 +16,13 @@ from config import (
     INTERKMS_SYNC_INTERVAL,
     INTERKMS_MAX_RETRIES
 )
+
+
+# -------------------------------
+# XOR
+# -------------------------------
+def xor(a, b):
+    return bytes(x ^ y for x, y in zip(a, b))
 
 
 class InterKMSClient:
@@ -81,8 +81,6 @@ class InterKMSClient:
 
                 stats = self.buffer.stats()
                 expected_index = stats.get("sync_index", 0)
-
-                # FIX: numeric key_id only
                 expected_key_id = str(expected_index)
 
                 success = False
@@ -91,10 +89,7 @@ class InterKMSClient:
 
                     try:
 
-                        self.audit.api_call(
-                            "/interkms/v1/request-key",
-                            plane="INTER-KMS"
-                        )
+                        self.audit.api("/interkms/v1/request-key")
 
                         response = requests.post(
                             f"{peer_url}/interkms/v1/request-key",
@@ -102,9 +97,7 @@ class InterKMSClient:
                                 "Authorization": f"Bearer {NODE_SHARED_SECRET}",
                                 "X-Node-ID": NODE_ID
                             },
-                            json={
-                                "key_id": expected_key_id
-                            },
+                            json={"key_id": expected_key_id},
                             timeout=5
                         )
 
@@ -113,10 +106,11 @@ class InterKMSClient:
 
                         data = response.json()
 
-                        # FIX: correct field name
                         received_key_id = data["key_id"]
 
-                        # STRONG SYNC VALIDATION
+                        # -------------------------------
+                        # STRICT SYNC CHECK
+                        # -------------------------------
                         if str(received_key_id) != expected_key_id:
 
                             self.audit.sync_mismatch(
@@ -125,19 +119,50 @@ class InterKMSClient:
                             )
                             continue
 
+                        enc_key = data["enc_key"]
+                        received_hash = data["hash"]
+
+                        # -------------------------------
+                        # GET PREVIOUS KEY
+                        # -------------------------------
+                        prev_id = str(int(received_key_id) - 1)
+                        prev_key = self.buffer.get_key_by_id(prev_id)
+
+                        if prev_key:
+                            new_key = xor(
+                                bytes.fromhex(enc_key),
+                                bytes.fromhex(prev_key.key_value)
+                            ).hex()
+                        else:
+                            # genesis case
+                            new_key = enc_key
+
+                        # -------------------------------
+                        # HASH VERIFICATION
+                        # -------------------------------
+                        local_hash = hashlib.sha256(new_key.encode()).hexdigest()
+
+                        if local_hash != received_hash:
+                            self.audit.sync_fail(received_key_id)
+                            continue
+
+                        self.audit.sync_success(received_key_id)
+
+                        # -------------------------------
+                        # CREATE KEY OBJECT
+                        # -------------------------------
                         key = Key(
                             key_id=received_key_id,
-                            key_value=data["key"],
-                            key_size=data.get("size", 256),
+                            key_value=new_key,
+                            key_size=256,
                             ttl_seconds=DEFAULT_TTL_SECONDS,
-                            origin_node=data.get("origin", peer_name)
+                            origin_node=peer_name
                         )
 
-                        # insert into buffer
-                        self.buffer.add_remote_key(
-                            key,
-                            remote_node=peer_name
-                        )
+                        # -------------------------------
+                        # ADD TO BUFFER
+                        # -------------------------------
+                        self.buffer.add_sync_key(key)
 
                         self.audit.log(
                             "KEY_SYNCED",

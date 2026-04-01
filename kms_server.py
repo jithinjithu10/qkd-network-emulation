@@ -1,17 +1,8 @@
-"""
-kms_server.py (UPDATED - RESEARCH LEVEL)
-
-Fixes:
-- Removed "sync-" prefix
-- Removed SYNC_KEY_INDEX dependency
-- Clean sync-safe key generation
-- Consistent key_id handling
-"""
+# kms_server.py (FINAL - WITH ACK SUPPORT)
 
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import uvicorn
-import uuid
 import secrets
 import hashlib
 
@@ -19,6 +10,7 @@ from config import (
     HOST,
     PORT,
     NODE_ROLE,
+    NODE_ID,
     KEY_SIZE,
     DEFAULT_TTL_SECONDS,
     INITIAL_KEY_POOL_SIZE,
@@ -34,6 +26,9 @@ from etsi_api import create_etsi_router
 from interkms_api import create_interkms_router
 from interkms_client import InterKMSClient
 
+#  NEW
+from ack_manager import AckManager
+
 
 # =================================================
 # SHARED
@@ -43,6 +38,9 @@ buffer = QBuffer()
 audit = AuditLogger()
 
 interkms_client = InterKMSClient(buffer, audit)
+
+#  ACK MANAGER
+ack_manager = AckManager()
 
 
 # =================================================
@@ -62,43 +60,48 @@ def preload_keys():
 
     print(f"[INFO] Preloading keys (mode={SYSTEM_MODE})")
 
-    for i in range(INITIAL_KEY_POOL_SIZE):
+    if SYSTEM_MODE == "SYNC":
 
-        # -----------------------------
-        # SYNC MODE
-        # -----------------------------
-        if SYSTEM_MODE == "SYNC":
+        for i in range(INITIAL_KEY_POOL_SIZE):
 
-            key_id = str(i)   # FIXED (numeric only)
+            key_id = str(i)
             key_value = generate_sync_key(i)
-            origin = "SYNC"
 
-        # -----------------------------
-        # ETSI MODE
-        # -----------------------------
-        else:
+            key = Key(
+                key_id=key_id,
+                key_value=key_value,
+                key_size=KEY_SIZE,
+                ttl_seconds=DEFAULT_TTL_SECONDS,
+                origin_node="SYNC"
+            )
 
-            key_id = str(uuid.uuid4())
-            key_value = secrets.token_bytes(KEY_SIZE // 8).hex()
-            origin = "LOCAL"
-
-        key = Key(
-            key_id=key_id,
-            key_value=key_value,
-            key_size=KEY_SIZE,
-            ttl_seconds=DEFAULT_TTL_SECONDS,
-            origin_node=origin
-        )
-
-        # add to buffer
-        if origin == "SYNC":
             buffer.add_sync_key(key)
+            print(f"[SYNC KEY] id={key_id}")
+
+    else:
+
+        if NODE_ID == "IITR":
+
+            for i in range(INITIAL_KEY_POOL_SIZE):
+
+                key_id = str(i)
+                key_value = secrets.token_bytes(KEY_SIZE // 8).hex()
+
+                key = Key(
+                    key_id=key_id,
+                    key_value=key_value,
+                    key_size=KEY_SIZE,
+                    ttl_seconds=DEFAULT_TTL_SECONDS,
+                    origin_node="IITR"
+                )
+
+                buffer.add_key(key)
+                print(f"[IITR KEY] id={key_id}")
+
         else:
-            buffer.add_key(key)
+            print("[IITJ] Waiting for keys from IITR...")
 
-        print(f"[KEY GENERATED] id={key_id} value={key_value[:12]}...")
-
-    print(f"[INFO] {INITIAL_KEY_POOL_SIZE} keys preloaded")
+    print(f"[INFO] Preload complete")
 
 
 # =================================================
@@ -114,7 +117,6 @@ async def lifespan(app: FastAPI):
 
     preload_keys()
 
-    # start inter-KMS if client
     if NODE_ROLE == "CLIENT":
         interkms_client.start()
         print("[INFO] Inter-KMS client started")
@@ -126,7 +128,7 @@ async def lifespan(app: FastAPI):
     print("[SYSTEM] Shutting down...")
 
     interkms_client.stop()
-    audit.system_shutdown()
+    audit.system_stop()
 
 
 # =================================================
@@ -135,13 +137,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ETSI-Aligned QKD Node",
-    version="4.0",
+    version="FINAL+ACK",
     description="QKD Key Management Node",
     lifespan=lifespan
 )
 
 app.include_router(create_etsi_router(buffer, audit))
-app.include_router(create_interkms_router(buffer, audit))
+
+#  PASS ACK MANAGER HERE
+app.include_router(create_interkms_router(buffer, audit, ack_manager))
 
 
 # =================================================

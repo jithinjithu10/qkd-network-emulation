@@ -1,10 +1,11 @@
 """
-application_demo.py (UPDATED - FINAL CORRECT)
+application_demo.py (FINAL - SYNC + KMS CORRECT)
 
 Fixes:
-- Includes AES-GCM tag
-- Matches SecureTransfer API
-- Consistent with research model
+- Uses key_id properly (not confusing session_id)
+- Works with IITR ↔ IITJ synced KMS
+- Clean separation of modes
+- Simple and clear
 """
 
 from secure_transfer import SecureTransfer
@@ -13,17 +14,17 @@ import hashlib
 
 
 # =================================================
-# CONFIGURATION
+# CONFIG
 # =================================================
 
 KMS_URL = "http://10.13.2.132:8001"
 TOKEN = "ETSI_DEMO_SECURE_TOKEN_2026"
 
-USE_SYNC_MODE = False   # True → simulate QKD sync
+USE_SYNC_MODE = False   # True → local sync (no KMS)
 
 
 # =================================================
-# SYNC KEY GENERATOR
+# SIMPLE SYNC KEY (FOR TEST MODE)
 # =================================================
 
 def generate_sync_key(index):
@@ -48,29 +49,33 @@ def run_demo():
 
 
     # =================================================
-    # MODE 1 → ETSI KMS
+    # MODE 1 → REAL KMS (IITR ↔ IITJ SYNC)
     # =================================================
     if not USE_SYNC_MODE:
 
-        print("\n[MODE] ETSI KMS (Session-Based)")
+        print("\n[MODE] KMS (Key_ID Based Sync)")
 
         app = SecureTransfer(KMS_URL, TOKEN)
 
-        #  FIXED: includes tag
-        session_id, iv, ciphertext, tag = app.send_secure_message(message)
+        # -------------------------------
+        # SENDER SIDE
+        # -------------------------------
+        key_id, iv, ciphertext, tag = app.send_secure_message(message)
 
         print("\nEncrypted Ciphertext:")
         print(ciphertext.hex())
 
-        print("\nSession ID (share this):")
-        print(session_id)
+        print("\nKey ID (share this):")
+        print(key_id)
 
         print("\nTag:")
         print(tag.hex())
 
-        #  FIXED: pass tag also
+        # -------------------------------
+        # RECEIVER SIDE
+        # -------------------------------
         decrypted = app.receive_secure_message(
-            session_id,
+            key_id,
             iv,
             ciphertext,
             tag
@@ -78,29 +83,33 @@ def run_demo():
 
 
     # =================================================
-    # MODE 2 → SYNC MODE
+    # MODE 2 → LOCAL SYNC (NO KMS)
     # =================================================
     else:
 
-        print("\n[MODE] Synchronized Key Generation")
+        print("\n[MODE] Local Sync (Same Key Generation)")
 
-        sync_index = 0   # must match sender
+        key_id = 0   # must match on both sides
 
-        key = generate_sync_key(sync_index)
+        key = generate_sync_key(key_id)
 
         ce = CryptoEngine(key)
 
-        # FIXED: include tag
         iv, ciphertext, tag = ce.encrypt(message.encode())
 
         print("\nEncrypted Ciphertext:")
         print(ciphertext.hex())
 
+        print("\nKey ID:")
+        print(key_id)
+
         print("\nTag:")
         print(tag.hex())
 
-        # simulate receiver
-        ce2 = CryptoEngine(key)
+        # receiver uses SAME key_id
+        key2 = generate_sync_key(key_id)
+
+        ce2 = CryptoEngine(key2)
 
         decrypted = ce2.decrypt(iv, ciphertext, tag).decode()
 
@@ -110,6 +119,10 @@ def run_demo():
 
     print("\n✔ Secure transmission successful")
 
+
+# =================================================
+# MAIN
+# =================================================
 
 if __name__ == "__main__":
     run_demo()

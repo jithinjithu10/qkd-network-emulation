@@ -1,11 +1,4 @@
-"""
-audit.py (FINAL - SESSION FREE, RESEARCH LEVEL)
-
-Clean version:
-- No session logic
-- Full key lifecycle tracking
-- Sync + Inter-KMS debugging
-"""
+# audit.py (FINAL - IMPROVED FOR KMS SYNC)
 
 from datetime import datetime, timezone
 from config import NODE_ID
@@ -16,11 +9,10 @@ class AuditLogger:
     def __init__(self):
         self.node_id = NODE_ID
 
-    # =================================================
+    # -------------------------------
     # CORE LOG
-    # =================================================
-
-    def log(self, event_type: str, message: str, plane: str = "LOCAL"):
+    # -------------------------------
+    def log(self, event_type, message, plane="LOCAL"):
 
         timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -32,137 +24,79 @@ class AuditLogger:
             f"{message}"
         )
 
-    # =================================================
+    # -------------------------------
     # SYSTEM
-    # =================================================
-
+    # -------------------------------
     def system_start(self):
-        self.log("SYSTEM_START", "QKD Node started", "SYSTEM")
+        self.log("SYSTEM_START", "Node started", "SYSTEM")
 
-    def system_shutdown(self):
-        self.log("SYSTEM_STOP", "QKD Node stopped", "SYSTEM")
+    def system_stop(self):
+        self.log("SYSTEM_STOP", "Node stopped", "SYSTEM")
 
-    # =================================================
+    # -------------------------------
     # KEY EVENTS
-    # =================================================
+    # -------------------------------
+    def key_added(self, key_id, origin="LOCAL"):
+        self.log("KEY_ADDED", f"id={key_id} from {origin}")
 
-    def key_added(self, key_id: str, origin: str = "LOCAL"):
-        self.log("KEY_ADDED", f"Key ID: {key_id} | Origin: {origin}", "LOCAL")
+    def key_served(self, key_id):
+        self.log("KEY_SERVED", f"id={key_id}", "APP")
 
-    def key_served(self, key_id: str):
-        self.log("KEY_SERVED", f"Key ID: {key_id}", "APPLICATION")
+    def key_used(self, key_id):
+        self.log("KEY_USED", f"id={key_id}", "APP")
 
-    def key_consumed(self, key_id: str):
-        self.log("KEY_CONSUMED", f"Key ID: {key_id}", "APPLICATION")
+    # -------------------------------
+    # SYNC EVENTS (VERY IMPORTANT)
+    # -------------------------------
 
-    def key_expired(self, key_id: str):
-        self.log("KEY_EXPIRED", f"Key ID: {key_id}", "LOCAL")
+    def sync_send(self, key_id, target):
+        self.log("SYNC_SEND", f"id={key_id} → {target}", "SYNC")
 
-    # =================================================
-    # DATA PER KEY (CRITICAL)
-    # =================================================
+    def sync_receive(self, key_id, source):
+        self.log("SYNC_RECEIVE", f"id={key_id} ← {source}", "SYNC")
 
-    def key_usage(self, key_id: str, bytes_used: int):
+    def sync_success(self, key_id):
+        self.log("SYNC_OK", f"id={key_id} matched", "SYNC")
+
+    def sync_fail(self, key_id):
+        self.log("SYNC_FAIL", f"id={key_id} mismatch", "SYNC")
+
+    def sync_compare(self, key_id, local_hash, remote_hash):
         self.log(
-            "KEY_USAGE",
-            f"Key ID: {key_id} used for {bytes_used} bytes",
-            "APPLICATION"
-        )
-
-    def key_limit_reached(self, key_id: str):
-        self.log(
-            "KEY_LIMIT",
-            f"Key ID: {key_id} reached max usage",
-            "APPLICATION"
-        )
-
-    # =================================================
-    # KEY ROTATION
-    # =================================================
-
-    def key_rotation(self, old_key: str, new_key: str):
-        self.log(
-            "KEY_ROTATION",
-            f"{old_key} → {new_key}",
+            "SYNC_COMPARE",
+            f"id={key_id} local={local_hash[:6]} remote={remote_hash[:6]}",
             "SYNC"
         )
 
-    # =================================================
-    # SYNC EVENTS
-    # =================================================
+    def sync_progress(self, key_id):
+        self.log("SYNC_PROGRESS", f"id={key_id}", "SYNC")
 
-    def sync_key_generated(self, key_id: str):
-        self.log("SYNC_KEY_GENERATED", f"Key ID: {key_id}", "SYNC")
-
-    def sync_key_matched(self, key_id: str):
-        self.log("SYNC_KEY_MATCH", f"Key ID: {key_id}", "SYNC")
-
-    def sync_progress(self, index: int):
-        self.log("SYNC_PROGRESS", f"Index: {index}", "SYNC")
-
-    def sync_mismatch(self, expected, received):
-        self.log(
-            "SYNC_ERROR",
-            f"Expected {expected}, got {received}",
-            "SYNC"
-        )
-
-    # =================================================
+    # -------------------------------
     # INTER-KMS
-    # =================================================
+    # -------------------------------
+    def key_sent(self, key_id, remote):
+        self.log("KEY_SENT", f"id={key_id} → {remote}", "INTER-KMS")
 
-    def key_shared_with_node(self, key_id: str, remote_node: str):
-        self.log(
-            "KEY_SHARED",
-            f"{key_id} → {remote_node}",
-            "INTER-KMS"
-        )
+    def key_received(self, key_id, remote):
+        self.log("KEY_RECEIVED", f"id={key_id} ← {remote}", "INTER-KMS")
 
-    def key_received_from_node(self, key_id: str, remote_node: str):
-        self.log(
-            "KEY_RECEIVED",
-            f"{key_id} ← {remote_node}",
-            "INTER-KMS"
-        )
-
-    def interkms_request(self, remote_node: str):
-        self.log("INTERKMS_REQUEST", f"From {remote_node}", "INTER-KMS")
-
-    def interkms_response(self, key_id: str, remote_node: str):
-        self.log(
-            "INTERKMS_RESPONSE",
-            f"{key_id} → {remote_node}",
-            "INTER-KMS"
-        )
-
-    # =================================================
+    # -------------------------------
     # CRYPTO
-    # =================================================
+    # -------------------------------
+    def encrypt(self, key_id, size):
+        self.log("ENCRYPT", f"id={key_id} bytes={size}", "APP")
 
-    def encryption(self, key_id: str, bytes_used: int, mode: str = "ETSI"):
-        self.log(
-            "ENCRYPTION",
-            f"Key ID: {key_id} | Bytes: {bytes_used} | Mode: {mode}",
-            "APPLICATION"
-        )
+    def decrypt(self, key_id, size):
+        self.log("DECRYPT", f"id={key_id} bytes={size}", "APP")
 
-    def decryption(self, key_id: str, bytes_used: int, mode: str = "ETSI"):
-        self.log(
-            "DECRYPTION",
-            f"Key ID: {key_id} | Bytes: {bytes_used} | Mode: {mode}",
-            "APPLICATION"
-        )
-
-    # =================================================
+    # -------------------------------
     # API
-    # =================================================
+    # -------------------------------
+    def api(self, endpoint):
+        self.log("API", endpoint, "API")
 
-    def api_call(self, endpoint: str, plane: str):
-        self.log("API_CALL", endpoint, plane)
-
-    # =================================================
+    # -------------------------------
     # ERROR
-    # =================================================
-
-    def error(self, message: str, plane: str = "LOCAL"):
-        self.log("ERROR", message, plane)
+    # -------------------------------
+    def error(self, msg):
+        self.log("ERROR", msg, "ERROR")

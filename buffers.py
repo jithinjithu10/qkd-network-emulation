@@ -1,11 +1,4 @@
-"""
-buffers.py (FINAL - SESSION FREE, RESEARCH LEVEL)
-
-Fixes:
-- Removed session logic completely
-- Added get_key_by_id()
-- Clean ETSI + SYNC design
-"""
+# buffers.py (FINAL - SYNC FIXED + CLEAN)
 
 from collections import deque
 from typing import Optional
@@ -32,7 +25,7 @@ class QBuffer:
         self.audit = AuditLogger()
 
     # =================================================
-    # ADD KEY
+    # ADD KEY (LOCAL GENERATION - IITR)
     # =================================================
 
     def add_key(self, key: Key):
@@ -53,25 +46,44 @@ class QBuffer:
             self.audit.key_added(key.key_id)
 
     # =================================================
-    # SYNC KEY ADD
+    # ADD SYNC KEY (IITJ SIDE)
     # =================================================
 
     def add_sync_key(self, key: Key):
 
         with self._lock:
 
+            expected_id = str(len(self._known_keys))
+
+            # -------------------------------
+            # STRICT ORDER CHECK
+            # -------------------------------
+            if key.key_id != expected_id:
+                self.audit.sync_mismatch(
+                    expected=expected_id,
+                    received=key.key_id
+                )
+                return
+
+            # -------------------------------
+            # DUPLICATE CHECK
+            # -------------------------------
             if key.key_id in self._known_keys:
                 self.audit.sync_key_matched(key.key_id)
                 return
 
+            # -------------------------------
+            # ADD KEY
+            # -------------------------------
             self._ready_queue.append(key)
             self._known_keys[key.key_id] = key
             self._key_usage[key.key_id] = 0
 
             self.audit.sync_key_generated(key.key_id)
+            self.audit.sync_success(key.key_id)
 
     # =================================================
-    # FETCH NEXT KEY
+    # GET NEXT KEY
     # =================================================
 
     def get_next_key(self) -> Optional[Key]:
@@ -80,6 +92,9 @@ class QBuffer:
 
             self._cleanup_expired_keys_locked()
 
+            # -------------------------------
+            # SYNC MODE (STRICT ORDER)
+            # -------------------------------
             if SYSTEM_MODE == "SYNC":
 
                 expected_key_id = str(self._sync_index)
@@ -88,7 +103,7 @@ class QBuffer:
 
                 if not key:
                     self.audit.sync_mismatch(
-                        expected=self._sync_index,
+                        expected=expected_key_id,
                         received=list(self._known_keys.keys())
                     )
                     return None
@@ -98,18 +113,20 @@ class QBuffer:
                     self.audit.key_expired(key.key_id)
                     return None
 
-                old_id = key.key_id
-
+                # USE KEY
                 key.consume()
                 self.audit.key_consumed(key.key_id)
 
+                # MOVE INDEX
                 self._sync_index += 1
 
-                self.audit.key_rotation(old_id, str(self._sync_index))
                 self.audit.sync_progress(self._sync_index)
 
                 return key
 
+            # -------------------------------
+            # NORMAL MODE
+            # -------------------------------
             else:
 
                 while self._ready_queue:
@@ -129,7 +146,7 @@ class QBuffer:
                 return None
 
     # =================================================
-    # GET KEY BY ID (VERY IMPORTANT)
+    # GET KEY BY ID (CRITICAL FOR APP)
     # =================================================
 
     def get_key_by_id(self, key_id: str) -> Optional[Key]:
@@ -139,6 +156,7 @@ class QBuffer:
             key = self._known_keys.get(key_id)
 
             if not key:
+                self.audit.error(f"Key not found: {key_id}")
                 return None
 
             if key.is_expired():
@@ -146,10 +164,11 @@ class QBuffer:
                 self.audit.key_expired(key.key_id)
                 return None
 
+            self.audit.key_served(key_id)
             return key
 
     # =================================================
-    # DATA USAGE
+    # DATA USAGE PER KEY
     # =================================================
 
     def use_key_bytes(self, key_id: str, byte_count: int):
@@ -213,6 +232,7 @@ class QBuffer:
 
             return {
                 "ready_ids": [k.key_id for k in self._ready_queue],
+                "all_ids": list(self._known_keys.keys()),
                 "sync_index": self._sync_index,
                 "usage": self._key_usage
             }

@@ -1,11 +1,4 @@
-"""
-etsi_api.py (UPDATED - RESEARCH LEVEL)
-
-Fixes:
-- Removed session abstraction
-- Pure key_id-based access
-- ETSI-aligned endpoints
-"""
+# etsi_api.py (FINAL - SYNC + CLEAN)
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -48,7 +41,7 @@ def create_etsi_router(buffer, audit):
     @router.get("/etsi/v2/status")
     def status(auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/status", "APPLICATION")
+        audit.api("/etsi/v2/status")
 
         stats = buffer.stats()
 
@@ -57,24 +50,26 @@ def create_etsi_router(buffer, audit):
             "status": "RUNNING",
             "mode": SYSTEM_MODE,
             "available_keys": stats["ready_keys"],
+            "total_keys": stats["total_keys"],
             "sync_index": stats.get("sync_index", 0)
         }
 
     # -------------------------------------------------
-    # GET NEW KEY
+    # GET NEXT KEY
     # -------------------------------------------------
 
     @router.post("/etsi/v2/keys")
     def get_key(auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/keys", "APPLICATION")
+        audit.api("/etsi/v2/keys")
 
         key = buffer.get_next_key()
 
         if not key:
-            audit.error("No keys available", "APPLICATION")
+            audit.error("No keys available")
             raise HTTPException(status_code=404, detail="No keys available")
 
+        # log usage
         audit.key_served(key.key_id)
 
         return {
@@ -85,18 +80,21 @@ def create_etsi_router(buffer, audit):
         }
 
     # -------------------------------------------------
-    # GET KEY BY ID (VERY IMPORTANT)
+    # GET KEY BY ID (CRITICAL FOR SYNC)
     # -------------------------------------------------
 
     @router.get("/etsi/v2/keys/{key_id}")
     def get_key_by_id(key_id: str, auth: bool = Depends(verify_token)):
 
-        audit.api_call("/etsi/v2/keys/{id}", "APPLICATION")
+        audit.api(f"/etsi/v2/keys/{key_id}")
 
         key = buffer.get_key_by_id(key_id)
 
         if not key:
+            audit.error(f"Key not found: {key_id}")
             raise HTTPException(status_code=404, detail="Key not found")
+
+        audit.key_served(key_id)
 
         return {
             "key_id": key.key_id,
